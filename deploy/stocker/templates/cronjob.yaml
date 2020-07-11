@@ -1,0 +1,27 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: hello
+spec:
+  schedule: "0 20 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: hello
+            image: gcr.io/ajensen-1993/stocker
+            volumeMounts:
+            - mountPath: /etc/config
+              name: stocker-config-volume
+          restartPolicy: OnFailure
+          volumes:
+          - name: stocker-config-volume
+            projected:
+              sources:
+              - configMap:
+                  name: stocker-config-cm
+              - secret:
+                  name: stocker-api-secret
+              - secret:
+                  name: stocker-db-secret

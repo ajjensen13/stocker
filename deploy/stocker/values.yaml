@@ -1,0 +1,22 @@
+replicaCount: 1
+image:
+  repository: ""
+  pullPolicy: ""
+  tag: ""
+  digest: ""
+env: []
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+priorityClassName: ""
+serviceAccount: {}
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+service:
+  type: ClusterIP
+  name: http
+  port: 80
+  containerPort: 80
+  protocol: TCP
+affinity: {}
