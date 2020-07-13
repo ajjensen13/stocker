@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  repository: ""
+  repository: "gcr.io/ajensen-1993/stocker"
   pullPolicy: ""
   tag: ""
   digest: ""
