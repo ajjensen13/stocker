@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stocker-config-cm
+data:
+  stocker-config-cm.json: |
+    {
+      "lookback_days": {{ .Values.config.lookbackDays }},
+      "exchange": "{{ .Values.config.exchange }}",
+      {{- with .Values.config.overrideDate }}
+      "override_date": "{{ . }}",
+      {{- end }}
+      "data_source_name": "{{ .Values.config.dataSourceName }}",
+      "resolution": "{{ .Values.config.resolution }}"
+    }

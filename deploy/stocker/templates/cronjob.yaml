@@ -3,14 +3,17 @@ kind: CronJob
 metadata:
   name: {{ .Chart.Name }}-cronjob
 spec:
-  schedule: "0 20 * * *"
+  schedule: "{{ .Values.schedule }}"
   jobTemplate:
     spec:
+      backoffLimit: 1
       template:
         spec:
+          restartPolicy: OnFailure
           containers:
           - name: {{ .Chart.Name }}
             image: "{{ .Values.image.repository }}{{ with .Values.image.tag }}:{{ . }}{{ end }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
+            imagePullPolicy: {{ default "IfNotPresent" .Values.image.pullPolicy }}
             command:
               - /bin/app
               - etl
