@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/config"
+	"github.com/ajjensen13/gke"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/wire"
 	"github.com/jackc/pgx/v4"
@@ -98,19 +99,21 @@ type candleConfig struct {
 	to         time.Time
 }
 
-func provideCandles(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
+func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
+	lg.Defaultf("extracting %q candles. (%v — %v) / %s", s.Symbol, cfg.from, cfg.to, cfg.resolution)
 	return extract.Candles(ctx, client, bo, s, cfg.resolution, cfg.from, cfg.to)
 }
 
-func provideStocks(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, cfg *appConfig) ([]finnhub.Stock, error) {
+func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, cfg *appConfig) ([]finnhub.Stock, error) {
+	lg.Defaultf("extracting %s stocks", cfg.Exchange)
 	return extract.Stocks(ctx, client, bo, cfg.Exchange)
 }
 
-func extractStocks(ctx context.Context) ([]finnhub.Stock, error) {
+func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideStocks))
 }
 
-func extractCandles(ctx context.Context, stock finnhub.Stock) (finnhub.StockCandles, error) {
+func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.StockCandles, error) {
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideCandles, provideCandleConfig))
 }
 

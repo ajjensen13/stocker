@@ -71,7 +71,7 @@ var etlCmd = &cobra.Command{
 		defer cleanup()
 
 		ctx := context.Background()
-		ess, err := extractStocks(ctx)
+		ess, err := extractStocks(ctx, lg)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to extract stocks: %w", err)))
 		}
@@ -100,7 +100,7 @@ var etlCmd = &cobra.Command{
 			case <-ctx.Done():
 				panic(lg.WarningErr(fmt.Errorf("aborting candle extraction %q: %w", es.Symbol, ctx.Err())))
 			case <-throttler.C:
-				ec, err := extractCandles(ctx, es)
+				ec, err := extractCandles(ctx, lg, es)
 				if err != nil {
 					panic(lg.ErrorErr(fmt.Errorf("failed to extract stock candles %q: %w", es.Symbol, err)))
 				}
