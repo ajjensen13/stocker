@@ -20,6 +20,8 @@ spec:
             volumeMounts:
             - mountPath: /etc/config
               name: stocker-config-volume
+            - name: k8info
+              mountPath: /etc/k8info
           volumes:
           - name: stocker-config-volume
             projected:
@@ -30,3 +32,21 @@ spec:
                   name: stocker-api-secret
               - secret:
                   name: stocker-db-secret
+          - name: k8info
+            projected:
+              sources:
+              - downwardAPI:
+                  items:
+                  - path: pod_name
+                    fieldRef:
+                      fieldPath: metadata.name
+                  - path: pod_namespace
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                  - path: pod_labels
+                    fieldRef:
+                      fieldPath: metadata.labels
+              - configMap:
+                  name: k8-cluster-info-cm
+              - configMap:
+                  name: stocker-container-name-cm
