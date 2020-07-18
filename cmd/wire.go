@@ -25,19 +25,24 @@ import (
 	"github.com/ajjensen13/gke"
 	"github.com/google/wire"
 	"github.com/jackc/pgx/v4"
+	"time"
 
 	"github.com/ajjensen13/stocker/internal/extract"
 )
 
-func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
+func timezone() (*time.Location, error) {
+	panic(wire.Build(provideTimezone, provideAppConfig))
+}
+
+func requestStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideStocks))
 }
 
-func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock))
+func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock, provideTimezone))
 }
 
-func extractLatestStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
+func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
 	panic(wire.Build(extract.LatestStocks, provideLatestStocks))
 }
 

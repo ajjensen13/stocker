@@ -33,7 +33,7 @@ func Stock(s finnhub.Stock) model.Stock {
 	}
 }
 
-func Candles(s finnhub.Stock, in finnhub.StockCandles) ([]model.Candle, error) {
+func Candles(s finnhub.Stock, in finnhub.StockCandles, tz *time.Location) ([]model.Candle, error) {
 	l := len(in.T)
 	switch {
 	case l == 0:
@@ -54,7 +54,7 @@ func Candles(s finnhub.Stock, in finnhub.StockCandles) ([]model.Candle, error) {
 	for ndx, ts := range in.T {
 		result[ndx] = model.Candle{
 			Symbol:    s.Symbol,
-			Timestamp: time.Unix(ts, 0),
+			Timestamp: time.Unix(ts, 0).In(tz),
 			Open:      &in.O[ndx],
 			High:      &in.H[ndx],
 			Low:       &in.L[ndx],

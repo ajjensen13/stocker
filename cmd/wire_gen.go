@@ -11,11 +11,24 @@ import (
 	"github.com/ajjensen13/gke"
 	"github.com/ajjensen13/stocker/internal/extract"
 	"github.com/jackc/pgx/v4"
+	"time"
 )
 
 // Injectors from wire.go:
 
-func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
+func timezone() (*time.Location, error) {
+	cmdAppConfig, err := provideAppConfig()
+	if err != nil {
+		return nil, err
+	}
+	location, err := provideTimezone(cmdAppConfig)
+	if err != nil {
+		return nil, err
+	}
+	return location, nil
+}
+
+func requestStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return nil, err
@@ -34,7 +47,7 @@ func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) 
 	return v, nil
 }
 
-func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
+func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return finnhub.StockCandles{}, err
@@ -47,7 +60,11 @@ func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 		return finnhub.StockCandles{}, err
 	}
 	cmdLatestStock := provideLatestStock(stock, latest)
-	cmdCandleConfig := provideCandleConfig(cmdAppConfig, cmdLatestStock)
+	location, err := provideTimezone(cmdAppConfig)
+	if err != nil {
+		return finnhub.StockCandles{}, err
+	}
+	cmdCandleConfig := provideCandleConfig(cmdAppConfig, cmdLatestStock, location)
 	stockCandles, err := provideCandles(cmdApiAuthContext, lg, defaultApiService, backOff, stock, cmdCandleConfig)
 	if err != nil {
 		return finnhub.StockCandles{}, err
@@ -55,7 +72,7 @@ func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 	return stockCandles, nil
 }
 
-func extractLatestStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
+func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
 	v, err := extract.LatestStocks(ctx, tx)
 	if err != nil {
 		return nil, err

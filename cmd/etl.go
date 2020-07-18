@@ -48,6 +48,7 @@ type appConfig struct {
 	Resolution     string    `json:"resolution"`
 	OverrideDate   time.Time `json:"override_date"`
 	DataSourceName string    `json:"data_source_name"`
+	Timezone       string    `json:"timezone"`
 }
 
 type appSecrets struct {
@@ -76,12 +77,12 @@ var etlCmd = &cobra.Command{
 		defer cleanup()
 
 		ctx := context.Background()
-		ess, err := extractStocks(ctx, lg)
+		ess, err := requestStocks(ctx, lg)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
 		}
 
-		latest, err := extractLatestStocks(ctx, lg, tx)
+		latest, err := queryMostRecentCandles(ctx, lg, tx)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to get latest stocks: %w", err)))
 		}
@@ -105,18 +106,24 @@ var etlCmd = &cobra.Command{
 		throttler := time.NewTicker(time.Second)
 		defer throttler.Stop()
 
+		tz, err := timezone()
+		if err != nil {
+			panic(lg.ErrorErr(fmt.Errorf("failed to timezone: %w", err)))
+		}
+		lg.Default(gke.NewFmtMsgData("using %v timezone to store data", tz))
+
 		<-throttler.C
 		for _, es := range ess {
 			select {
 			case <-ctx.Done():
 				panic(lg.WarningErr(fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())))
 			case <-throttler.C:
-				ec, err := extractCandles(ctx, lg, es, latest)
+				ec, err := requestCandles(ctx, lg, es, latest)
 				if err != nil {
 					panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err)))
 				}
 
-				tcs, err := transform.Candles(es, ec)
+				tcs, err := transform.Candles(es, ec, tz)
 				if err != nil {
 					panic(lg.ErrorErr(fmt.Errorf("failed to transform stock candles %q: %w", es.Symbol, err)))
 				}
@@ -141,6 +148,13 @@ var etlCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(etlCmd)
+}
+
+func provideTimezone(appConfig *appConfig) (*time.Location, error) {
+	if appConfig.Timezone == "" {
+		return time.UTC, nil
+	}
+	return time.LoadLocation(appConfig.Timezone)
 }
 
 func provideAppSecrets() (*appSecrets, error) {
@@ -195,13 +209,13 @@ func provideLatestStock(stock finnhub.Stock, latest latestStocks) latestStock {
 	}
 }
 
-func provideCandleConfig(cfg *appConfig, latest latestStock) candleConfig {
+func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) candleConfig {
 	var to time.Time
 	if cfg.OverrideDate.IsZero() {
-		now := time.Now()
-		to = time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.Local)
+		now := time.Now().In(tz)
+		to = time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, tz)
 	} else {
-		to = cfg.OverrideDate
+		to = cfg.OverrideDate.In(tz)
 	}
 
 	from := latest.timestamp.Add(time.Second)
