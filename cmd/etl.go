@@ -19,13 +19,19 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"github.com/Finnhub-Stock-API/finnhub-go"
+	"github.com/ajjensen13/config"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"net/url"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ajjensen13/gke"
 
+	"github.com/ajjensen13/stocker/internal/extract"
 	"github.com/ajjensen13/stocker/internal/load"
 	"github.com/ajjensen13/stocker/internal/model"
 	"github.com/ajjensen13/stocker/internal/transform"
@@ -74,6 +80,7 @@ var etlCmd = &cobra.Command{
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
 		}
+		ess = ess[:10]
 
 		latest, err := extractLatestStocks(ctx, lg, tx)
 		if err != nil {
@@ -136,3 +143,139 @@ var etlCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(etlCmd)
 }
+
+func provideAppSecrets() (*appSecrets, error) {
+	var result appSecrets
+	err := config.InterfaceJson(apiSecretName, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func provideApiServiceClient() *finnhub.DefaultApiService {
+	return finnhub.NewAPIClient(finnhub.NewConfiguration()).DefaultApi
+}
+
+func provideApiAuthContext(ctx context.Context, secrets *appSecrets) apiAuthContext {
+	return context.WithValue(ctx, finnhub.ContextAPIKey, finnhub.APIKey{Key: secrets.ApiKey})
+}
+
+func provideAppConfig() (*appConfig, error) {
+	var result appConfig
+	err := config.InterfaceJson(appConfigName, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func provideDbSecrets() (*url.Userinfo, error) {
+	ui, err := config.Userinfo(dbSecretName)
+	if err != nil {
+		return nil, err
+	}
+	return ui, nil
+}
+
+func provideBackoff() backoff.BackOff {
+	result := backoff.NewExponentialBackOff()
+	result.InitialInterval = time.Second
+	return result
+}
+
+type latestStock struct {
+	symbol    string
+	timestamp time.Time
+}
+
+func provideLatestStock(stock finnhub.Stock, latest latestStocks) latestStock {
+	return latestStock{
+		symbol:    stock.Symbol,
+		timestamp: latest[stock.Symbol],
+	}
+}
+
+func provideCandleConfig(cfg *appConfig, latest latestStock) candleConfig {
+	var to time.Time
+	if cfg.OverrideDate.IsZero() {
+		now := time.Now()
+		to = time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.Local)
+	} else {
+		to = cfg.OverrideDate
+	}
+
+	from := latest.timestamp.Add(time.Second)
+	if to.Before(from) {
+		to, from = from, to
+	}
+
+	return candleConfig{
+		resolution: cfg.Resolution,
+		from:       from,
+		to:         to,
+	}
+}
+
+type candleConfig struct {
+	resolution string
+	from       time.Time
+	to         time.Time
+}
+
+func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
+	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.from, cfg.to, cfg.resolution),
+		struct {
+			Symbol     string
+			From, To   time.Time
+			Resolution string
+		}{s.Symbol, cfg.from, cfg.to, cfg.resolution}))
+	return extract.Candles(ctx, client, bo, s, cfg.resolution, cfg.from, cfg.to)
+}
+
+func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, cfg *appConfig) ([]finnhub.Stock, error) {
+	lg.Defaultf("requesting %s stocks from finnhub", cfg.Exchange)
+	return extract.Stocks(ctx, client, bo, cfg.Exchange)
+}
+
+type latestStocks map[string]time.Time
+
+func provideLatestStocks(latest map[string]time.Time) latestStocks {
+	return latestStocks(latest)
+}
+
+func provideDbConnPool(ctx context.Context, user *url.Userinfo, cfg *appConfig) (*pgxpool.Pool, func(), error) {
+	dsn, err := url.Parse(cfg.DataSourceName)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("failed to parse data source name: %w", err)
+	}
+	dsn.User = user
+
+	pool, err := pgxpool.Connect(ctx, dsn.String())
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("failed to open database connection pool: %w", err)
+	}
+
+	return pool, pool.Close, nil
+}
+
+func provideDbConn(ctx context.Context, pool *pgxpool.Pool) (*pgx.Conn, func(), error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("failed to aquire database connection: %w", err)
+	}
+
+	result := conn.Conn()
+	err = result.Ping(ctx)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	return result, conn.Release, nil
+}
+
+func provideDbTx(ctx context.Context, conn *pgx.Conn, opts pgx.TxOptions) (pgx.Tx, error) {
+	return conn.BeginTx(ctx, opts)
+}
+
+type apiAuthContext context.Context
