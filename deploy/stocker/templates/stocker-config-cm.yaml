@@ -9,6 +9,9 @@ data:
       {{- with .Values.config.overrideDate }}
       "override_date": "{{ . }}",
       {{- end }}
+      {{- with .Values.config.timezone }}
+      "timezone": "{{ . }}",
+      {{- end }}
       "data_source_name": "{{ .Values.config.dataSourceName }}",
       "resolution": "{{ .Values.config.resolution }}"
     }

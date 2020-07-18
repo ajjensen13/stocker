@@ -5,6 +5,7 @@ image:
   digest: ""
 schedule: "0 1 * * *"
 config:
+  timezone: America/Chicago
   exchange: US
   overrideDate: null
   dataSourceName: "postgres://pgdb-svc:5432/stocker?sslmode=disable"
