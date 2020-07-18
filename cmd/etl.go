@@ -80,7 +80,6 @@ var etlCmd = &cobra.Command{
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
 		}
-		ess = ess[:10]
 
 		latest, err := extractLatestStocks(ctx, lg, tx)
 		if err != nil {
