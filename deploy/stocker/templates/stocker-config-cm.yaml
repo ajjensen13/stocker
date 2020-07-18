@@ -5,7 +5,6 @@ metadata:
 data:
   stocker-config-cm.json: |
     {
-      "lookback_days": {{ .Values.config.lookbackDays }},
       "exchange": "{{ .Values.config.exchange }}",
       {{- with .Values.config.overrideDate }}
       "override_date": "{{ . }}",

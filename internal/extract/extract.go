@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/jackc/pgx/v4"
 	"time"
 )
 
@@ -51,4 +52,24 @@ func Candles(ctx context.Context, client *finnhub.DefaultApiService, b backoff.B
 	}, b)
 
 	return result, err
+}
+
+func LatestStocks(ctx context.Context, tx pgx.Tx) (map[string]time.Time, error) {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT "Symbol", MAX("Timestamp") FROM "public"."StockCandles" GROUP BY "Symbol"`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query latest stocks: %w", err)
+	}
+
+	result := make(map[string]time.Time)
+	for rows.Next() {
+		var symbol string
+		var timestamp time.Time
+		err := rows.Scan(&symbol, &timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse latest stocks: %w", err)
+		}
+		result[symbol] = timestamp
+	}
+
+	return result, nil
 }

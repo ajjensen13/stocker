@@ -38,7 +38,6 @@ const (
 )
 
 type appConfig struct {
-	LookBackDays   int       `json:"lookback_days"`
 	Exchange       string    `json:"exchange"`
 	Resolution     string    `json:"resolution"`
 	OverrideDate   time.Time `json:"override_date"`
@@ -73,8 +72,14 @@ var etlCmd = &cobra.Command{
 		ctx := context.Background()
 		ess, err := extractStocks(ctx, lg)
 		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to extract stocks: %w", err)))
+			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
 		}
+
+		latest, err := extractLatestStocks(ctx, lg, tx)
+		if err != nil {
+			panic(lg.ErrorErr(fmt.Errorf("failed to get latest stocks: %w", err)))
+		}
+		lg.Default(gke.NewFmtMsgData("extracted %d existing stocks from database", len(latest)))
 
 		tss := make([]model.Stock, 0, len(ess))
 		for _, es := range ess {
@@ -87,9 +92,9 @@ var etlCmd = &cobra.Command{
 
 		err = load.Stocks(ctx, tx, tss)
 		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to load stocks: %w", err)))
+			panic(lg.ErrorErr(fmt.Errorf("failed to load stocks into database: %w", err)))
 		}
-		lg.Defaultf("extracted & loaded %d stocks", len(tss))
+		lg.Default(gke.NewFmtMsgData("extracted & loaded %d stocks", len(tss)))
 
 		throttler := time.NewTicker(time.Second)
 		defer throttler.Stop()
@@ -98,11 +103,11 @@ var etlCmd = &cobra.Command{
 		for _, es := range ess {
 			select {
 			case <-ctx.Done():
-				panic(lg.WarningErr(fmt.Errorf("aborting candle extraction %q: %w", es.Symbol, ctx.Err())))
+				panic(lg.WarningErr(fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())))
 			case <-throttler.C:
-				ec, err := extractCandles(ctx, lg, es)
+				ec, err := extractCandles(ctx, lg, es, latest)
 				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to extract stock candles %q: %w", es.Symbol, err)))
+					panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err)))
 				}
 
 				tcs, err := transform.Candles(es, ec)
@@ -112,10 +117,10 @@ var etlCmd = &cobra.Command{
 
 				err = load.Candles(ctx, tx, tcs)
 				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to load stock candles %q: %w", es.Symbol, err)))
+					panic(lg.ErrorErr(fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)))
 				}
 
-				lg.Defaultf("extracted & loaded %d stock candles: %s", len(tcs), es.Symbol)
+				lg.Defaultf("requested & loaded %d stock candles from finnhub into database: %s", len(tcs), es.Symbol)
 			}
 		}
 

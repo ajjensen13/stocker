@@ -75,7 +75,19 @@ func provideBackoff() backoff.BackOff {
 	return result
 }
 
-func provideCandleConfig(cfg *appConfig) candleConfig {
+type latestStock struct {
+	symbol    string
+	timestamp time.Time
+}
+
+func provideLatestStock(stock finnhub.Stock, latest latestStocks) latestStock {
+	return latestStock{
+		symbol:    stock.Symbol,
+		timestamp: latest[stock.Symbol],
+	}
+}
+
+func provideCandleConfig(cfg *appConfig, latest latestStock) candleConfig {
 	var to time.Time
 	if cfg.OverrideDate.IsZero() {
 		now := time.Now()
@@ -84,7 +96,10 @@ func provideCandleConfig(cfg *appConfig) candleConfig {
 		to = cfg.OverrideDate
 	}
 
-	from := to.AddDate(0, 0, -cfg.LookBackDays)
+	from := latest.timestamp.Add(time.Second)
+	if to.Before(from) {
+		to, from = from, to
+	}
 
 	return candleConfig{
 		resolution: cfg.Resolution,
@@ -100,12 +115,17 @@ type candleConfig struct {
 }
 
 func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
-	lg.Defaultf("extracting %q candles. (%v — %v) / %s", s.Symbol, cfg.from, cfg.to, cfg.resolution)
+	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.from, cfg.to, cfg.resolution),
+		struct {
+			Symbol     string
+			From, To   time.Time
+			Resolution string
+		}{s.Symbol, cfg.from, cfg.to, cfg.resolution}))
 	return extract.Candles(ctx, client, bo, s, cfg.resolution, cfg.from, cfg.to)
 }
 
 func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, cfg *appConfig) ([]finnhub.Stock, error) {
-	lg.Defaultf("extracting %s stocks", cfg.Exchange)
+	lg.Defaultf("requesting %s stocks from finnhub", cfg.Exchange)
 	return extract.Stocks(ctx, client, bo, cfg.Exchange)
 }
 
@@ -113,8 +133,18 @@ func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) 
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideStocks))
 }
 
-func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.StockCandles, error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideCandles, provideCandleConfig))
+func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock))
+}
+
+type latestStocks map[string]time.Time
+
+func extractLatestStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
+	panic(wire.Build(extract.LatestStocks, provideLatestStocks))
+}
+
+func provideLatestStocks(latest map[string]time.Time) latestStocks {
+	return latestStocks(latest)
 }
 
 func provideDbConnPool(ctx context.Context, user *url.Userinfo, cfg *appConfig) (*pgxpool.Pool, func(), error) {
