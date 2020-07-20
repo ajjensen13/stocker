@@ -27,7 +27,7 @@ import (
 
 func Stocks(ctx context.Context, tx pgx.Tx, ss []model.Stock) error {
 	for _, stock := range ss {
-		_, err := tx.Exec(ctx, `INSERT INTO "public"."StockSymbols" ("Symbol", "DisplaySymbol", "Description") VALUES ($1, $2, $3) ON CONFLICT ("Symbol") DO UPDATE SET "DisplaySymbol" = $2, "Description" = $3`, stock.Symbol, stock.DisplaySymbol, stock.Description)
+		_, err := tx.Exec(ctx, `INSERT INTO "public"."Stocks" ("Symbol", "DisplaySymbol", "Description") VALUES ($1, $2, $3) ON CONFLICT ("Symbol") DO UPDATE SET "DisplaySymbol" = $2, "Description" = $3`, stock.Symbol, stock.DisplaySymbol, stock.Description)
 		if err != nil {
 			return fmt.Errorf("failed to load stock symbol %q: %w", stock.Symbol, err)
 		}
@@ -37,7 +37,7 @@ func Stocks(ctx context.Context, tx pgx.Tx, ss []model.Stock) error {
 
 func Candles(ctx context.Context, tx pgx.Tx, ss []model.Candle) error {
 	for _, s := range ss {
-		_, err := tx.Exec(ctx, `INSERT INTO "public"."StockCandles" ("Symbol", "Timestamp", "Open", "High", "Low", "Close", "Volume") VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT ("Symbol", "Timestamp") DO UPDATE SET "Open" = $3, "High" = $4, "Low" = $5, "Close" = $6, "Volume" = $7`, s.Symbol, s.Timestamp, s.Open, s.High, s.Low, s.Close, s.Volume)
+		_, err := tx.Exec(ctx, `INSERT INTO "public"."Candles" ("Symbol", "Timestamp", "Open", "High", "Low", "Close", "Volume") VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT ("Symbol", "Timestamp") DO UPDATE SET "Open" = $3, "High" = $4, "Low" = $5, "Close" = $6, "Volume" = $7`, s.Symbol, s.Timestamp, s.Open, s.High, s.Low, s.Close, s.Volume)
 		if err != nil {
 			return fmt.Errorf("failed to load stock symbol %q: %w", s.Symbol, err)
 		}
