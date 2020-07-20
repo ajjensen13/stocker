@@ -55,7 +55,7 @@ func Candles(ctx context.Context, client *finnhub.DefaultApiService, b backoff.B
 }
 
 func LatestStocks(ctx context.Context, tx pgx.Tx) (map[string]time.Time, error) {
-	rows, err := tx.Query(ctx, `SELECT DISTINCT "Symbol", MAX("Timestamp") FROM "public"."StockCandles" GROUP BY "Symbol"`)
+	rows, err := tx.Query(ctx, `SELECT DISTINCT "Symbol", MAX("Timestamp") FROM "public"."Candles" GROUP BY "Symbol"`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query latest stocks: %w", err)
 	}
