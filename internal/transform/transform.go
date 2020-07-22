@@ -65,3 +65,25 @@ func Candles(s finnhub.Stock, in finnhub.StockCandles, tz *time.Location) ([]mod
 
 	return result, nil
 }
+
+func CompanyProfile(in finnhub.CompanyProfile2) (out model.CompanyProfile, err error) {
+	ipoDate, err := time.Parse("2006-01-02", in.Ipo)
+	if err != nil {
+		return model.CompanyProfile{}, nil
+	}
+
+	return model.CompanyProfile{
+		Country:              in.Country,
+		Currency:             in.Currency,
+		Exchange:             in.Exchange,
+		Name:                 in.Name,
+		Symbol:               in.Ticker,
+		Ipo:                  ipoDate,
+		MarketCapitalization: in.MarketCapitalization,
+		ShareOutstanding:     in.ShareOutstanding,
+		Logo:                 in.Logo,
+		Phone:                in.Phone,
+		WebUrl:               in.Weburl,
+		Industry:             in.FinnhubIndustry,
+	}, nil
+}

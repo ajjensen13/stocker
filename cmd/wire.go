@@ -42,6 +42,10 @@ func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock, provideTimezone))
 }
 
+func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideBackoff, provideApiAuthContext, provideCompanyProfiles))
+}
+
 func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
 	panic(wire.Build(extract.LatestStocks, provideLatestStocks))
 }

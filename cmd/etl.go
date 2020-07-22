@@ -137,6 +137,30 @@ var etlCmd = &cobra.Command{
 			}
 		}
 
+		for _, es := range ess {
+			select {
+			case <-ctx.Done():
+				panic(lg.WarningErr(fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())))
+			case <-throttler.C:
+				ecp, err := requestCompanyProfile(ctx, lg, es)
+				if err != nil {
+					panic(lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err)))
+				}
+
+				tcp, err := transform.CompanyProfile(ecp)
+				if err != nil {
+					panic(lg.ErrorErr(fmt.Errorf("failed to transform company profile %q: %w", es.Symbol, err)))
+				}
+
+				err = load.CompanyProfile(ctx, tx, tcp)
+				if err != nil {
+					panic(lg.ErrorErr(fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)))
+				}
+
+				lg.Defaultf("requested & loaded company profile from finnhub into database: %q", es.Symbol)
+			}
+		}
+
 		err = tx.Commit(ctx)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("error while committing database transaction: %w", err)))
@@ -247,8 +271,13 @@ func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultAp
 }
 
 func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, cfg *appConfig) ([]finnhub.Stock, error) {
-	lg.Defaultf("requesting %s stocks from finnhub", cfg.Exchange)
+	lg.Defaultf("requesting %q stocks from finnhub", cfg.Exchange)
 	return extract.Stocks(ctx, client, bo, cfg.Exchange)
+}
+
+func provideCompanyProfiles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+	lg.Defaultf("requesting %q company profiles from finnhub", stock.Symbol)
+	return extract.CompanyProfile(ctx, client, bo, stock)
 }
 
 type latestStocks map[string]time.Time

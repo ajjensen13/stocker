@@ -44,3 +44,11 @@ func Candles(ctx context.Context, tx pgx.Tx, ss []model.Candle) error {
 	}
 	return nil
 }
+
+func CompanyProfile(ctx context.Context, tx pgx.Tx, cp model.CompanyProfile) error {
+	_, err := tx.Exec(ctx, `INSERT INTO "public"."CompanyProfile" ("Exchange", "Symbol", "Country", "Currency", "Name", "Ipo", "MarketCapitalization", "SharesOutstanding", "Logo", "Phone", "WebUrl", "Industry") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT ("Exchange", "Symbol") DO UPDATE SET "Country" = $3, "Currency" = $4, "Name" = $5, "Ipo" = $6, "MarketCapitalization" = $7, "SharesOutstanding" = $8, "Logo" = $9, "Phone" = $10, "WebUrl" = $11, "Industry" = $12`, cp.Exchange, cp.Symbol, cp.Country, cp.Currency, cp.Name, cp.Ipo, cp.MarketCapitalization, cp.ShareOutstanding, cp.Logo, cp.Phone, cp.WebUrl, cp.Industry)
+	if err != nil {
+		return fmt.Errorf("failed to load company profile %q: %w", cp.Symbol, err)
+	}
+	return nil
+}

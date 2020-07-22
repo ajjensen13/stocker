@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
+	"github.com/antihax/optional"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
 	"time"
@@ -46,6 +47,20 @@ func Candles(ctx context.Context, client *finnhub.DefaultApiService, b backoff.B
 		c, _, err := client.StockCandles(ctx, stock.Symbol, resolution, from.Unix(), to.Unix(), nil)
 		if err != nil {
 			return fmt.Errorf("error while getting candle for stock %q: %w", stock.Symbol, err)
+		}
+		result = c
+		return nil
+	}, b)
+
+	return result, err
+}
+
+func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, b backoff.BackOff, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+	var result finnhub.CompanyProfile2
+	err := backoff.Retry(func() error {
+		c, _, err := client.CompanyProfile2(ctx, &finnhub.CompanyProfile2Opts{Symbol: optional.NewString(stock.Symbol)})
+		if err != nil {
+			return fmt.Errorf("error while getting company profile %q: %w", stock.Symbol, err)
 		}
 		result = c
 		return nil

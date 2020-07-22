@@ -72,6 +72,21 @@ func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 	return stockCandles, nil
 }
 
+func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+	cmdAppSecrets, err := provideAppSecrets()
+	if err != nil {
+		return finnhub.CompanyProfile2{}, err
+	}
+	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
+	defaultApiService := provideApiServiceClient()
+	backOff := provideBackoff()
+	companyProfile2, err := provideCompanyProfiles(cmdApiAuthContext, lg, defaultApiService, backOff, stock)
+	if err != nil {
+		return finnhub.CompanyProfile2{}, err
+	}
+	return companyProfile2, nil
+}
+
 func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
 	v, err := extract.LatestStocks(ctx, tx)
 	if err != nil {
