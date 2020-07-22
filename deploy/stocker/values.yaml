@@ -3,7 +3,7 @@ image:
   pullPolicy: ""
   tag: ""
   digest: ""
-schedule: "0 1 * * *"
+schedule: "0 1 * * 0"
 config:
   timezone: America/Chicago
   exchange: US
