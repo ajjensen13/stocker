@@ -18,7 +18,7 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package model
 
 type Stock struct {
-	Symbol        string `yaml:"symbol,omitempty" json:"symbol,omitempty"`
-	DisplaySymbol string `yaml:"display_symbol,omitempty" json:"display_symbol,omitempty"`
-	Description   string `yaml:"description,omitempty" json:"description,omitempty"`
+	Symbol        string
+	DisplaySymbol string
+	Description   string
 }

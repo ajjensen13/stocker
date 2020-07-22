@@ -22,11 +22,11 @@ import (
 )
 
 type Candle struct {
-	Symbol    string    `yaml:"symbol,omitempty" json:"symbol,omitempty"`
-	Timestamp time.Time `yaml:"timestamp,omitempty" json:"timestamp,omitempty"`
-	Open      *float32  `yaml:"open,omitempty" json:"open,omitempty"`
-	High      *float32  `yaml:"high,omitempty" json:"high,omitempty"`
-	Low       *float32  `yaml:"low,omitempty" json:"low,omitempty"`
-	Close     *float32  `yaml:"close,omitempty" json:"close,omitempty"`
-	Volume    *float32  `yaml:"volume,omitempty" json:"volume,omitempty"`
+	Symbol    string
+	Timestamp time.Time
+	Open      *float32
+	High      *float32
+	Low       *float32
+	Close     *float32
+	Volume    *float32
 }
