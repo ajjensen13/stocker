@@ -36,11 +36,12 @@ func requestStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) 
 	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
 	backOff := provideBackoff()
+	notify := provideBackoffNotifier(lg)
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
 		return nil, err
 	}
-	v, err := provideStocks(cmdApiAuthContext, lg, defaultApiService, backOff, cmdAppConfig)
+	v, err := provideStocks(cmdApiAuthContext, lg, defaultApiService, backOff, notify, cmdAppConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +56,7 @@ func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
 	backOff := provideBackoff()
+	notify := provideBackoffNotifier(lg)
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
 		return finnhub.StockCandles{}, err
@@ -65,7 +67,7 @@ func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 		return finnhub.StockCandles{}, err
 	}
 	cmdCandleConfig := provideCandleConfig(cmdAppConfig, cmdLatestStock, location)
-	stockCandles, err := provideCandles(cmdApiAuthContext, lg, defaultApiService, backOff, stock, cmdCandleConfig)
+	stockCandles, err := provideCandles(cmdApiAuthContext, lg, defaultApiService, backOff, notify, stock, cmdCandleConfig)
 	if err != nil {
 		return finnhub.StockCandles{}, err
 	}
@@ -80,7 +82,8 @@ func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Sto
 	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
 	backOff := provideBackoff()
-	companyProfile2, err := provideCompanyProfiles(cmdApiAuthContext, lg, defaultApiService, backOff, stock)
+	notify := provideBackoffNotifier(lg)
+	companyProfile2, err := provideCompanyProfiles(cmdApiAuthContext, lg, defaultApiService, backOff, notify, stock)
 	if err != nil {
 		return finnhub.CompanyProfile2{}, err
 	}

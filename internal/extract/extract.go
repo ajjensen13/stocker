@@ -27,44 +27,44 @@ import (
 	"time"
 )
 
-func Stocks(ctx context.Context, client *finnhub.DefaultApiService, b backoff.BackOff, exchange string) ([]finnhub.Stock, error) {
+func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, exchange string) ([]finnhub.Stock, error) {
 	var result []finnhub.Stock
-	err := backoff.Retry(func() error {
+	err := backoff.RetryNotify(func() error {
 		ss, _, err := client.StockSymbols(ctx, exchange)
 		if err != nil {
 			return fmt.Errorf("error while getting stocks: %w", err)
 		}
 		result = ss
 		return nil
-	}, b)
+	}, bo, bon)
 
 	return result, err
 }
 
-func Candles(ctx context.Context, client *finnhub.DefaultApiService, b backoff.BackOff, stock finnhub.Stock, resolution string, from, to time.Time) (finnhub.StockCandles, error) {
+func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, from, to time.Time) (finnhub.StockCandles, error) {
 	var result finnhub.StockCandles
-	err := backoff.Retry(func() error {
+	err := backoff.RetryNotify(func() error {
 		c, _, err := client.StockCandles(ctx, stock.Symbol, resolution, from.Unix(), to.Unix(), nil)
 		if err != nil {
 			return fmt.Errorf("error while getting candle for stock %q: %w", stock.Symbol, err)
 		}
 		result = c
 		return nil
-	}, b)
+	}, bo, bon)
 
 	return result, err
 }
 
-func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, b backoff.BackOff, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
 	var result finnhub.CompanyProfile2
-	err := backoff.Retry(func() error {
+	err := backoff.RetryNotify(func() error {
 		c, _, err := client.CompanyProfile2(ctx, &finnhub.CompanyProfile2Opts{Symbol: optional.NewString(stock.Symbol)})
 		if err != nil {
 			return fmt.Errorf("error while getting company profile %q: %w", stock.Symbol, err)
 		}
 		result = c
 		return nil
-	}, b)
+	}, bo, bon)
 
 	return result, err
 }

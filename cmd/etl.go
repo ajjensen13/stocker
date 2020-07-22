@@ -260,30 +260,36 @@ type candleConfig struct {
 	to         time.Time
 }
 
-func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
+func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
 	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.from, cfg.to, cfg.resolution),
 		struct {
 			Symbol     string
 			From, To   time.Time
 			Resolution string
 		}{s.Symbol, cfg.from, cfg.to, cfg.resolution}))
-	return extract.Candles(ctx, client, bo, s, cfg.resolution, cfg.from, cfg.to)
+	return extract.Candles(ctx, client, bo, bon, s, cfg.resolution, cfg.from, cfg.to)
 }
 
-func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, cfg *appConfig) ([]finnhub.Stock, error) {
+func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {
 	lg.Defaultf("requesting %q stocks from finnhub", cfg.Exchange)
-	return extract.Stocks(ctx, client, bo, cfg.Exchange)
+	return extract.Stocks(ctx, client, bo, bon, cfg.Exchange)
 }
 
-func provideCompanyProfiles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+func provideCompanyProfiles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
 	lg.Defaultf("requesting %q company profiles from finnhub", stock.Symbol)
-	return extract.CompanyProfile(ctx, client, bo, stock)
+	return extract.CompanyProfile(ctx, client, bo, bon, stock)
 }
 
 type latestStocks map[string]time.Time
 
 func provideLatestStocks(latest map[string]time.Time) latestStocks {
 	return latestStocks(latest)
+}
+
+func provideBackoffNotifier(lg gke.Logger) backoff.Notify {
+	return func(err error, duration time.Duration) {
+		lg.Warning(gke.NewFmtMsgData("request failed, waiting %v before retrying: %v", duration, err))
+	}
 }
 
 func provideDbConnPool(ctx context.Context, user *url.Userinfo, cfg *appConfig) (*pgxpool.Pool, func(), error) {

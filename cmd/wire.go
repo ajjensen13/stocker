@@ -35,15 +35,15 @@ func timezone() (*time.Location, error) {
 }
 
 func requestStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideStocks))
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideStocks))
 }
 
 func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock, provideTimezone))
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock, provideTimezone))
 }
 
 func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideBackoff, provideApiAuthContext, provideCompanyProfiles))
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideCompanyProfiles))
 }
 
 func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
