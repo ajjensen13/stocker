@@ -120,7 +120,9 @@ var etlCmd = &cobra.Command{
 			case <-throttler.C:
 				ec, err := requestCandles(ctx, lg, es, latest)
 				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err)))
+					_ = lg.WarningErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err))
+					_ = lg.Infof("stock candles %q will be skipped due to error", es.Symbol)
+					continue
 				}
 
 				tcs, err := transform.Candles(es, ec, tz)
@@ -144,7 +146,9 @@ var etlCmd = &cobra.Command{
 			case <-throttler.C:
 				ecp, err := requestCompanyProfile(ctx, lg, es)
 				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err)))
+					_ = lg.WarningErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err))
+					_ = lg.Infof("company profile %q will be skipped due to error", es.Symbol)
+					continue
 				}
 
 				tcp, err := transform.CompanyProfile(ecp)
