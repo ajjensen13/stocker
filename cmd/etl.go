@@ -226,6 +226,12 @@ func provideBackoff() backoff.BackOff {
 	return result
 }
 
+func provideBackoffNotifier(lg gke.Logger) backoff.Notify {
+	return func(err error, duration time.Duration) {
+		lg.Warning(gke.NewFmtMsgData("request failed, waiting %v before retrying: %v", duration, err))
+	}
+}
+
 type latestStock struct {
 	symbol    string
 	timestamp time.Time
@@ -289,12 +295,6 @@ type latestStocks map[string]time.Time
 
 func provideLatestStocks(latest map[string]time.Time) latestStocks {
 	return latestStocks(latest)
-}
-
-func provideBackoffNotifier(lg gke.Logger) backoff.Notify {
-	return func(err error, duration time.Duration) {
-		lg.Warning(gke.NewFmtMsgData("request failed, waiting %v before retrying: %v", duration, err))
-	}
 }
 
 func provideDbConnPool(ctx context.Context, user *url.Userinfo, cfg *appConfig) (*pgxpool.Pool, func(), error) {
