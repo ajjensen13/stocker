@@ -19,20 +19,23 @@ package extract
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/antihax/optional"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
+	"io/ioutil"
+	"net/http"
 	"time"
 )
 
 func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, exchange string) ([]finnhub.Stock, error) {
 	var result []finnhub.Stock
 	err := backoff.RetryNotify(func() error {
-		ss, _, err := client.StockSymbols(ctx, exchange)
+		ss, resp, err := client.StockSymbols(ctx, exchange)
 		if err != nil {
-			return fmt.Errorf("error while getting stocks: %w", err)
+			return handleErr("error while getting stocks", resp, err)
 		}
 		result = ss
 		return nil
@@ -44,9 +47,9 @@ func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.B
 func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, from, to time.Time) (finnhub.StockCandles, error) {
 	var result finnhub.StockCandles
 	err := backoff.RetryNotify(func() error {
-		c, _, err := client.StockCandles(ctx, stock.Symbol, resolution, from.Unix(), to.Unix(), nil)
+		c, resp, err := client.StockCandles(ctx, stock.Symbol, resolution, from.Unix(), to.Unix(), nil)
 		if err != nil {
-			return fmt.Errorf("error while getting candle for stock %q: %w", stock.Symbol, err)
+			return handleErr(fmt.Sprintf("error while getting candle for stock %q", stock.Symbol), resp, err)
 		}
 		result = c
 		return nil
@@ -58,9 +61,9 @@ func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.
 func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
 	var result finnhub.CompanyProfile2
 	err := backoff.RetryNotify(func() error {
-		c, _, err := client.CompanyProfile2(ctx, &finnhub.CompanyProfile2Opts{Symbol: optional.NewString(stock.Symbol)})
+		c, resp, err := client.CompanyProfile2(ctx, &finnhub.CompanyProfile2Opts{Symbol: optional.NewString(stock.Symbol)})
 		if err != nil {
-			return fmt.Errorf("error while getting company profile %q: %w", stock.Symbol, err)
+			return handleErr(fmt.Sprintf("error while getting company profile %q", stock.Symbol), resp, err)
 		}
 		result = c
 		return nil
@@ -87,4 +90,17 @@ func LatestStocks(ctx context.Context, tx pgx.Tx) (map[string]time.Time, error) 
 	}
 
 	return result, nil
+}
+
+var errToManyRequests = errors.New("error: too many requests")
+
+func handleErr(msg string, resp *http.Response, err error) error {
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("%s: %w", msg, errToManyRequests)
+	default:
+		defer resp.Body.Close()
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("%s: %w (%s)", msg, err, string(body))
+	}
 }
