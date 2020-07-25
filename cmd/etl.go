@@ -222,6 +222,7 @@ func provideDbSecrets() (*url.Userinfo, error) {
 func provideBackoff() backoff.BackOff {
 	result := backoff.NewExponentialBackOff()
 	result.InitialInterval = time.Second
+	result.MaxElapsedTime = time.Minute
 	return result
 }
 
