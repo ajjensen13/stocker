@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/config"
@@ -228,6 +229,10 @@ func provideBackoff() backoff.BackOff {
 
 func provideBackoffNotifier(lg gke.Logger) backoff.Notify {
 	return func(err error, duration time.Duration) {
+		if errors.Is(err, extract.ErrToManyRequests) {
+			lg.Info(gke.NewFmtMsgData("request exceeded rate limit, waiting %v before retrying: %v", duration, err))
+			return
+		}
 		lg.Warning(gke.NewFmtMsgData("request failed, waiting %v before retrying: %v", duration, err))
 	}
 }

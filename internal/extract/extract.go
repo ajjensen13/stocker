@@ -92,12 +92,12 @@ func LatestStocks(ctx context.Context, tx pgx.Tx) (map[string]time.Time, error) 
 	return result, nil
 }
 
-var errToManyRequests = errors.New("error: too many requests")
+var ErrToManyRequests = errors.New("error: too many requests")
 
 func handleErr(msg string, resp *http.Response, err error) error {
 	switch resp.StatusCode {
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("%s: %w", msg, errToManyRequests)
+		return fmt.Errorf("%s: %w", msg, ErrToManyRequests)
 	default:
 		defer resp.Body.Close()
 		body, _ := ioutil.ReadAll(resp.Body)
