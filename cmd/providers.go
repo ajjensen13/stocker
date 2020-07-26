@@ -212,7 +212,7 @@ type migrationLogger struct {
 }
 
 func (m migrationLogger) Printf(format string, v ...interface{}) {
-	m.Defaultf(format, v)
+	m.Defaultf(format, v...)
 }
 
 func (m migrationLogger) Verbose() bool {
