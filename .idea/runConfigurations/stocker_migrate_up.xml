@@ -1,8 +1,8 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="go build github.com/ajjensen13/stocker" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+  <configuration default="false" name="stocker migrate up" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="stocker" />
     <working_directory value="$PROJECT_DIR$" />
-    <parameters value="etl" />
+    <parameters value="migrate up" />
     <kind value="PACKAGE" />
     <filePath value="$PROJECT_DIR$/main.go" />
     <package value="github.com/ajjensen13/stocker" />

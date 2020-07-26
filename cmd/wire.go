@@ -23,33 +23,51 @@ import (
 	"context"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/gke"
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/google/wire"
 	"github.com/jackc/pgx/v4"
+	"net/url"
 	"time"
 
 	"github.com/ajjensen13/stocker/internal/extract"
 )
 
-func timezone() (*time.Location, error) {
+func timezone() (tz *time.Location, err error) {
 	panic(wire.Build(provideTimezone, provideAppConfig))
 }
 
-func requestStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
+func requestStocks(ctx context.Context, lg gke.Logger) (ss []finnhub.Stock, err error) {
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideStocks))
 }
 
-func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
+func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (sc finnhub.StockCandles, err error) {
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock, provideTimezone))
 }
 
-func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (cp finnhub.CompanyProfile2, err error) {
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideCompanyProfiles))
 }
 
-func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
+func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (ls latestStocks, err error) {
 	panic(wire.Build(extract.LatestStocks, provideLatestStocks))
 }
 
-func openTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, func(), error) {
-	panic(wire.Build(provideDbConnPool, provideDbConn, provideDbTx, provideDbSecrets, provideAppConfig))
+func dataSourceName() (dsn *url.URL, err error) {
+	panic(wire.Build(provideDataSourceName, provideDbSecrets, provideAppConfig))
+}
+
+func openTx(ctx context.Context) (tx pgx.Tx, cleanup func(), err error) {
+	panic(wire.Build(provideDbConnPool, dataSourceName, provideDbConn, provideDbTx, wire.Value(pgx.TxOptions{})))
+}
+
+func migrationSourceURL() (uri string, err error) {
+	panic(wire.Build(provideMigrationSourceURL, provideAppConfig))
+}
+
+func logger() (lg gke.Logger, cleanup func()) {
+	panic(wire.Build(provideLogger))
+}
+
+func migrator(lg gke.Logger) (m *migrate.Migrate, err error) {
+	panic(wire.Build(provideMigrator, migrationSourceURL, dataSourceName))
 }

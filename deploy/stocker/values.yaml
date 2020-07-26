@@ -10,3 +10,4 @@ config:
   overrideDate: null
   dataSourceName: "postgres://pgdb-svc:5432/stocker?sslmode=disable"
   resolution: D
+  migration_source_url: "file:///var/migrate"

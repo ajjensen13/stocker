@@ -17,4 +17,5 @@ FROM gcr.io/distroless/base:${RUN_TAG} as run
 ENTRYPOINT []
 ENV GOTRACEBACK=single
 COPY --from=build /go/bin/* /bin/
+COPY ./migrate /var/migrate
 CMD [ "/bin/app" ]

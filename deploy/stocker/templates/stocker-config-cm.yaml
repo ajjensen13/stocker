@@ -13,5 +13,6 @@ data:
       "timezone": "{{ . }}",
       {{- end }}
       "data_source_name": "{{ .Values.config.dataSourceName }}",
-      "resolution": "{{ .Values.config.resolution }}"
+      "resolution": "{{ .Values.config.resolution }}",
+      "migration_source_url": "{{ .Values.config.migration_source_url }}"
     }

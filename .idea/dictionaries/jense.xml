@@ -2,7 +2,9 @@
   <dictionary name="jense">
     <words>
       <w>cloze</w>
+      <w>finnhub</w>
       <w>lookback</w>
+      <w>migrator</w>
       <w>stocker</w>
     </words>
   </dictionary>

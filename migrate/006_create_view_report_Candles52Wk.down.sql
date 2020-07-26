@@ -1,0 +1,1 @@
+DROP VIEW report."Candles52Wk"

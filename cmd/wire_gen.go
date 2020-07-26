@@ -10,8 +10,15 @@ import (
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/gke"
 	"github.com/ajjensen13/stocker/internal/extract"
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v4"
+	"net/url"
 	"time"
+)
+
+import (
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
 // Injectors from wire.go:
@@ -99,16 +106,28 @@ func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (late
 	return cmdLatestStocks, nil
 }
 
-func openTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, func(), error) {
+func dataSourceName() (*url.URL, error) {
 	userinfo, err := provideDbSecrets()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
+		return nil, err
+	}
+	urlURL, err := provideDataSourceName(userinfo, cmdAppConfig)
+	if err != nil {
+		return nil, err
+	}
+	return urlURL, nil
+}
+
+func openTx(ctx context.Context) (pgx.Tx, func(), error) {
+	urlURL, err := dataSourceName()
+	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := provideDbConnPool(ctx, userinfo, cmdAppConfig)
+	pool, cleanup, err := provideDbConnPool(ctx, urlURL)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,7 +136,8 @@ func openTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	tx, err := provideDbTx(ctx, conn, opts)
+	txOptions := _wireTxOptionsValue
+	tx, err := provideDbTx(ctx, conn, txOptions)
 	if err != nil {
 		cleanup2()
 		cleanup()
@@ -127,4 +147,40 @@ func openTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, func(), error) {
 		cleanup2()
 		cleanup()
 	}, nil
+}
+
+var (
+	_wireTxOptionsValue = pgx.TxOptions{}
+)
+
+func migrationSourceURL() (string, error) {
+	cmdAppConfig, err := provideAppConfig()
+	if err != nil {
+		return "", err
+	}
+	string2 := provideMigrationSourceURL(cmdAppConfig)
+	return string2, nil
+}
+
+func logger() (gke.Logger, func()) {
+	gkeLogger, cleanup := provideLogger()
+	return gkeLogger, func() {
+		cleanup()
+	}
+}
+
+func migrator(lg gke.Logger) (*migrate.Migrate, error) {
+	urlURL, err := dataSourceName()
+	if err != nil {
+		return nil, err
+	}
+	string2, err := migrationSourceURL()
+	if err != nil {
+		return nil, err
+	}
+	migrateMigrate, err := provideMigrator(lg, urlURL, string2)
+	if err != nil {
+		return nil, err
+	}
+	return migrateMigrate, nil
 }
