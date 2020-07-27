@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
-    <data-source source="LOCAL" name="stocker@localhost:32346/stocker" uuid="48037136-3a2c-4aab-b4b5-5faf9fe483ef">
+    <data-source source="LOCAL" name="stocker@localhost/stocker" uuid="48037136-3a2c-4aab-b4b5-5faf9fe483ef">
       <driver-ref>postgresql</driver-ref>
       <synchronize>true</synchronize>
+      <remarks>localhost:32346</remarks>
       <jdbc-driver>org.postgresql.Driver</jdbc-driver>
       <jdbc-url>jdbc:postgresql://localhost:32346/stocker</jdbc-url>
     </data-source>
-    <data-source source="LOCAL" name="stocker@cloudsql/stocker" read-only="true" uuid="87c284d0-1d30-4cc6-a202-41fa5616b026">
+    <data-source source="LOCAL" name="stocker_ro@ajensen-1993:us-central1:pgdb/stocker" read-only="true" uuid="87c284d0-1d30-4cc6-a202-41fa5616b026">
       <driver-ref>postgresql</driver-ref>
       <synchronize>true</synchronize>
       <remarks>uses cloud_sql_proxy on port 32345</remarks>
