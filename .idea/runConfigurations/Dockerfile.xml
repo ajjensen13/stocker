@@ -2,7 +2,7 @@
   <configuration default="false" name="Dockerfile" type="docker-deploy" factoryName="dockerfile" server-name="Docker">
     <deployment type="dockerfile">
       <settings>
-        <option name="imageTag" value="stocker" />
+        <option name="imageTag" value="gcr.io/ajensen-1993/stocker" />
         <option name="buildCliOptions" value="" />
         <option name="command" value="" />
         <option name="containerName" value="" />
