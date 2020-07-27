@@ -11,7 +11,7 @@ spec:
         spec:
           restartPolicy: OnFailure
           initContainers:
-          - name: {{ .Chart.Name }}-init
+          - name: stocker-init
             image: "{{ .Values.image.repository }}{{ with .Values.image.tag }}:{{ . }}{{ end }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
             imagePullPolicy: {{ default "IfNotPresent" .Values.image.pullPolicy }}
             command:
@@ -21,10 +21,10 @@ spec:
             volumeMounts:
             - mountPath: /etc/config
               name: stocker-config-volume
-            - name: k8info
+            - name: k8info-init
               mountPath: /etc/k8info
           containers:
-          - name: {{ .Chart.Name }}
+          - name: stocker
             image: "{{ .Values.image.repository }}{{ with .Values.image.tag }}:{{ . }}{{ end }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
             imagePullPolicy: {{ default "IfNotPresent" .Values.image.pullPolicy }}
             command:
@@ -45,6 +45,13 @@ spec:
                   name: stocker-api-secret
               - secret:
                   name: stocker-db-secret
+          - name: stocker-init-config-volume
+            projected:
+              sources:
+              - configMap:
+                  name: stocker-config-cm
+              - secret:
+                  name: stocker-db-secret
           - name: k8info
             projected:
               sources:
@@ -63,3 +70,21 @@ spec:
                   name: k8-cluster-info-cm
               - configMap:
                   name: stocker-container-name-cm
+          - name: k8info-init
+            projected:
+              sources:
+              - downwardAPI:
+                  items:
+                  - path: pod_name
+                    fieldRef:
+                      fieldPath: metadata.name
+                  - path: pod_namespace
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                  - path: pod_labels
+                    fieldRef:
+                      fieldPath: metadata.labels
+              - configMap:
+                  name: k8-cluster-info-cm
+              - configMap:
+                  name: stocker-init-container-name-cm
