@@ -1,6 +1,7 @@
 {
   "exchange": "US",
-  "override_date": null,
+  "start_date": null,
+  "end_date": null,
   "data_source_name": "postgres://localhost:32346/stocker?sslmode=disable",
   "resolution": "D",
   "migration_source_url": "file://migrate"

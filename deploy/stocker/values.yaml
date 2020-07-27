@@ -7,7 +7,8 @@ schedule: "0 1 * * 0"
 config:
   timezone: America/Chicago
   exchange: US
-  overrideDate: null
+  startDate: null
+  endDateDate: null
   dataSourceName: "postgres://pgdb-svc:5432/stocker?sslmode=disable"
   resolution: D
   migration_source_url: "file:///var/migrate"

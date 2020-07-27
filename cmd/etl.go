@@ -39,7 +39,8 @@ const (
 type appConfig struct {
 	Exchange           string    `json:"exchange"`
 	Resolution         string    `json:"resolution"`
-	OverrideDate       time.Time `json:"override_date"`
+	StartDate          time.Time `json:"start_date"`
+	EndDate            time.Time `json:"end_date"`
 	DataSourceName     string    `json:"data_source_name"`
 	Timezone           string    `json:"timezone"`
 	MigrationSourceURL string    `json:"migration_source_url"`
@@ -173,8 +174,8 @@ type latestStock struct {
 
 type candleConfig struct {
 	resolution string
-	from       time.Time
-	to         time.Time
+	startDate  time.Time
+	endDate    time.Time
 }
 
 type latestStocks map[string]time.Time

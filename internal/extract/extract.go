@@ -44,10 +44,10 @@ func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.B
 	return result, err
 }
 
-func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, from, to time.Time) (finnhub.StockCandles, error) {
+func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, startDate, endDate time.Time) (finnhub.StockCandles, error) {
 	var result finnhub.StockCandles
 	err := backoff.RetryNotify(func() error {
-		c, resp, err := client.StockCandles(ctx, stock.Symbol, resolution, from.Unix(), to.Unix(), nil)
+		c, resp, err := client.StockCandles(ctx, stock.Symbol, resolution, startDate.Unix(), endDate.Unix(), nil)
 		if err != nil {
 			return handleErr(fmt.Sprintf("error while getting candle for stock %q", stock.Symbol), resp, err)
 		}

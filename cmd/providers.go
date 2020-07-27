@@ -100,34 +100,40 @@ func provideLatestStock(stock finnhub.Stock, latest latestStocks) latestStock {
 }
 
 func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) candleConfig {
-	var to time.Time
-	if cfg.OverrideDate.IsZero() {
+	var endDate time.Time
+	if cfg.EndDate.IsZero() {
 		now := time.Now().In(tz)
-		to = time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, tz)
+		endDate = time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, tz)
 	} else {
-		to = cfg.OverrideDate.In(tz)
+		endDate = cfg.EndDate.In(tz)
 	}
 
-	from := latest.timestamp.Add(time.Second)
-	if to.Before(from) {
-		to, from = from, to
+	var startDate time.Time
+	if cfg.StartDate.IsZero() {
+		startDate = latest.timestamp.Add(time.Second)
+	} else {
+		startDate = cfg.StartDate.In(tz)
+	}
+
+	if endDate.Before(startDate) {
+		endDate, startDate = startDate, endDate
 	}
 
 	return candleConfig{
 		resolution: cfg.Resolution,
-		from:       from,
-		to:         to,
+		startDate:  startDate,
+		endDate:    endDate,
 	}
 }
 
 func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
-	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.from, cfg.to, cfg.resolution),
+	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution),
 		struct {
-			Symbol     string
-			From, To   time.Time
-			Resolution string
-		}{s.Symbol, cfg.from, cfg.to, cfg.resolution}))
-	return extract.Candles(ctx, client, bo, bon, s, cfg.resolution, cfg.from, cfg.to)
+			Symbol             string
+			StartDate, EndDate time.Time
+			Resolution         string
+		}{s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution}))
+	return extract.Candles(ctx, client, bo, bon, s, cfg.resolution, cfg.startDate, cfg.endDate)
 }
 
 func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {

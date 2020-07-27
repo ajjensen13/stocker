@@ -6,8 +6,11 @@ data:
   stocker-config-cm.json: |
     {
       "exchange": "{{ .Values.config.exchange }}",
-      {{- with .Values.config.overrideDate }}
-      "override_date": "{{ . }}",
+      {{- with .Values.config.startDate }}
+        "start_date": "{{ . }}",
+      {{- end }}
+      {{- with .Values.config.endDate }}
+        "end_date": "{{ . }}",
       {{- end }}
       {{- with .Values.config.timezone }}
       "timezone": "{{ . }}",
