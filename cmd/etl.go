@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"github.com/Finnhub-Stock-API/finnhub-go"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -53,7 +54,7 @@ type appSecrets struct {
 // etlCmd represents the etl command
 var etlCmd = &cobra.Command{
 	Use:   "etl",
-	Short: "",
+	Short: "runs a stocker etl",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
 		lg, cleanup := logger()
@@ -69,6 +70,11 @@ var etlCmd = &cobra.Command{
 		ess, err := requestStocks(ctx, lg)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
+		}
+
+		ess, err = skipAndLimit(cmd, lg, ess)
+		if err != nil {
+			panic(lg.ErrorErr(fmt.Errorf("failed to reduce result set using skip and limit: %w", err)))
 		}
 
 		latest, err := queryMostRecentCandles(ctx, lg, tx)
@@ -163,8 +169,43 @@ var etlCmd = &cobra.Command{
 	},
 }
 
+func skipAndLimit(cmd *cobra.Command, lg gke.Logger, ess []finnhub.Stock) ([]finnhub.Stock, error) {
+	reqS, err := cmd.Flags().GetInt("skip")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get skip flag: %w", err)
+	}
+	var actS = 0
+	if reqS > -1 {
+		actS = reqS
+		maxS := len(ess)
+		if reqS > maxS {
+			actS = reqS
+		}
+		lg.Defaultf("skipping %d entries (skip %d requested, %d entries found)", actS, reqS, maxS)
+		ess = ess[actS:]
+	}
+
+	reqL, err := cmd.Flags().GetInt("limit")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get limit flag: %w", err)
+	}
+	var actL = 0
+	if reqL > -1 {
+		actL = reqL
+		maxL := len(ess)
+		if reqL > maxL {
+			actL = reqL
+		}
+		lg.Defaultf("limiting to %d entries (limit %d requested, %d entries remain after skipping %d)", actL, reqL, maxL, actS)
+		ess = ess[:actL]
+	}
+	return ess, nil
+}
+
 func init() {
 	rootCmd.AddCommand(etlCmd)
+	etlCmd.Flags().IntP("skip", "s", -1, "number of stocks to skip")
+	etlCmd.Flags().IntP("limit", "l", -1, "maximum number of stocks to update")
 }
 
 type latestStock struct {
