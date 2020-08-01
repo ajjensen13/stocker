@@ -1,0 +1,1 @@
+DROP VIEW src."Candles52Wk"

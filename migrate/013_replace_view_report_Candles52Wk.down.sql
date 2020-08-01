@@ -1,3 +1,4 @@
+DROP VIEW IF EXISTS src."Candles52Wk";
 CREATE VIEW src."Candles52Wk" AS
 SELECT s."Symbol",
        s."Timestamp",

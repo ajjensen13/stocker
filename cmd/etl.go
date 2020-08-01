@@ -28,6 +28,7 @@ import (
 
 	"github.com/ajjensen13/stocker/internal/load"
 	"github.com/ajjensen13/stocker/internal/model"
+	"github.com/ajjensen13/stocker/internal/stage"
 	"github.com/ajjensen13/stocker/internal/transform"
 )
 
@@ -67,6 +68,7 @@ var etlCmd = &cobra.Command{
 		defer cleanup()
 
 		ctx := context.Background()
+
 		ess, err := requestStocks(ctx, lg)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
@@ -159,6 +161,30 @@ var etlCmd = &cobra.Command{
 				lg.Defaultf("requested & loaded company profile from finnhub into database: %q", es.Symbol)
 			}
 		}
+
+		si, err := stage.Stocks(ctx, tx)
+		if err != nil {
+			panic(lg.ErrorErr(fmt.Errorf("failed to stage stocks: %w", err)))
+		}
+		lg.Defaultf("successfully staged %d stocks (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+
+		si, err = stage.CompanyProfile(ctx, tx)
+		if err != nil {
+			panic(lg.ErrorErr(fmt.Errorf("failed to stage company profiles: %w", err)))
+		}
+		lg.Defaultf("successfully staged %d company profiles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+
+		si, err = stage.Candles(ctx, tx)
+		if err != nil {
+			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
+		}
+		lg.Defaultf("successfully staged %d candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+
+		si, err = stage.Candles52Wk(ctx, tx, si.PreviousLatestModification)
+		if err != nil {
+			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
+		}
+		lg.Defaultf("successfully staged %d 53wk candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
 
 		err = tx.Commit(ctx)
 		if err != nil {
