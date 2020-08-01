@@ -4,7 +4,7 @@
       <settings>
         <option name="imageTag" value="gcr.io/ajensen-1993/stocker" />
         <option name="buildCliOptions" value="" />
-        <option name="command" value="" />
+        <option name="command" value="/bin/app etl" />
         <option name="containerName" value="" />
         <option name="contextFolderPath" value="." />
         <option name="entrypoint" value="" />
