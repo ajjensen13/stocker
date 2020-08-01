@@ -34,7 +34,7 @@ func latestModification(ctx context.Context, tx pgx.Tx, table string) (time.Time
 		return time.Time{}, nil
 	}
 
-	var timestamp time.Time
+	var timestamp *time.Time
 	err = rows.Scan(&timestamp)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to parse latest %s modification: %w", table, err)
@@ -44,7 +44,11 @@ func latestModification(ctx context.Context, tx pgx.Tx, table string) (time.Time
 		return time.Time{}, fmt.Errorf("query for latest %s modification returned multiple rows", table)
 	}
 
-	return timestamp, nil
+	if timestamp == nil {
+		return time.Time{}, nil
+	}
+
+	return *timestamp, nil
 }
 
 func Stocks(ctx context.Context, tx pgx.Tx) (StagingInfo, error) {

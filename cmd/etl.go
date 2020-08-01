@@ -105,7 +105,7 @@ var etlCmd = &cobra.Command{
 
 		tz, err := timezone()
 		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to timezone: %w", err)))
+			panic(lg.ErrorErr(fmt.Errorf("failed to get timezone: %w", err)))
 		}
 		lg.Default(gke.NewFmtMsgData("using %v timezone to store data", tz))
 
