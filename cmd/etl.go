@@ -184,7 +184,7 @@ var etlCmd = &cobra.Command{
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
 		}
-		lg.Defaultf("successfully staged %d 53wk candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+		lg.Defaultf("successfully staged %d 52wk candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
 
 		err = tx.Commit(ctx)
 		if err != nil {
