@@ -20,6 +20,7 @@ package stage
 import (
 	"context"
 	"fmt"
+	"github.com/ajjensen13/gke"
 	"github.com/jackc/pgx/v4"
 	"time"
 )
@@ -93,13 +94,124 @@ func CompanyProfile(ctx context.Context, tx pgx.Tx) (StagingInfo, error) {
 	return StagingInfo{PreviousLatestModification: l, RowsAffected: r.RowsAffected()}, nil
 }
 
-func Candles52Wk(ctx context.Context, tx pgx.Tx, latestModification time.Time) (StagingInfo, error) {
-	r, err := tx.Exec(ctx, `WITH affected AS (SELECT DISTINCT affected."Symbol", affected."Timestamp" FROM src."Candles" modified JOIN src."Candles" affected ON modified."Symbol" = affected."Symbol" WHERE modified."Modified" > $1 AND modified."Timestamp" BETWEEN affected."Timestamp" - INTERVAL '52 week' AND affected."Timestamp") INSERT INTO stage."Candles52Wk" ("Symbol", "Timestamp", "HighMax", "HighMin", "HighAvg", "HighCount", "LowMax", "LowMin", "LowAvg", "LowCount", "VolumeMax", "VolumeMin", "VolumeAvg", "VolumeCount") SELECT "Candles52Wk"."Symbol", "Candles52Wk"."Timestamp", "Candles52Wk"."HighMax", "Candles52Wk"."HighMin", "Candles52Wk"."HighAvg", "Candles52Wk"."HighCount", "Candles52Wk"."LowMax", "Candles52Wk"."LowMin", "Candles52Wk"."LowAvg", "Candles52Wk"."LowCount", "Candles52Wk"."VolumeMax", "Candles52Wk"."VolumeMin", "Candles52Wk"."VolumeAvg", "Candles52Wk"."VolumeCount" FROM src."Candles52Wk" JOIN affected ON affected."Symbol" = "Candles52Wk"."Symbol" AND affected."Timestamp" = "Candles52Wk"."Timestamp" ON CONFLICT ("Symbol", "Timestamp") DO UPDATE SET "Symbol" = excluded."Symbol", "Timestamp" = excluded."Timestamp", "HighMax" = excluded."HighMax", "HighMin" = excluded."HighMin", "HighAvg" = excluded."HighAvg", "HighCount" = excluded."HighCount", "LowMax" = excluded."LowMax", "LowMin" = excluded."LowMin", "LowAvg" = excluded."LowAvg", "LowCount" = excluded."LowCount", "VolumeMax" = excluded."VolumeMax", "VolumeMin" = excluded."VolumeMin", "VolumeAvg" = excluded."VolumeAvg", "VolumeCount" = excluded."VolumeCount"`, latestModification)
+func Candles52Wk(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time) (StagingInfo, error) {
+	affected, err := calcAffected(ctx, tx, latestModification)
 	if err != nil {
-		return StagingInfo{}, fmt.Errorf("error while staging 52 week candles: %w", err)
+		return StagingInfo{}, err
+	}
+	lg.Defaultf("successfully calculated affected 52wk candles")
+
+	err = updateAffected(ctx, lg, tx, affected)
+	if err != nil {
+		return StagingInfo{}, err
 	}
 
-	return StagingInfo{PreviousLatestModification: latestModification, RowsAffected: r.RowsAffected()}, nil
+	return StagingInfo{PreviousLatestModification: latestModification, RowsAffected: int64(len(affected))}, nil
+}
+
+func updateAffected(ctx context.Context, lg gke.Logger, tx pgx.Tx, affected map[string][]time.Time) error {
+	var updates uint
+
+	for symbol, timestamps := range affected {
+		for _, timestamp := range timestamps {
+			_, err := tx.Exec(ctx, `
+			INSERT INTO stage."Candles52Wk" ("Symbol", "Timestamp", "HighMax", "HighMin", "HighAvg", "HighCount", "LowMax", "LowMin", "LowAvg", "LowCount", "VolumeMax", "VolumeMin", "VolumeAvg", "VolumeCount") 
+			SELECT 
+				"Candles52Wk"."Symbol", 
+				"Candles52Wk"."Timestamp", 
+				"Candles52Wk"."HighMax", 
+				"Candles52Wk"."HighMin", 
+				"Candles52Wk"."HighAvg", 
+				"Candles52Wk"."HighCount", 
+				"Candles52Wk"."LowMax", 
+				"Candles52Wk"."LowMin", 
+				"Candles52Wk"."LowAvg", 
+				"Candles52Wk"."LowCount", 
+				"Candles52Wk"."VolumeMax", 
+				"Candles52Wk"."VolumeMin", 
+				"Candles52Wk"."VolumeAvg", 
+				"Candles52Wk"."VolumeCount" 
+			FROM src."Candles52Wk" 
+			WHERE 
+				"Candles52Wk"."Symbol" = $1
+				AND "Candles52Wk"."Timestamp" = $2
+			ON CONFLICT ("Symbol", "Timestamp") 
+			DO UPDATE SET 
+				"Symbol" = excluded."Symbol", 
+				"Timestamp" = excluded."Timestamp", 
+				"HighMax" = excluded."HighMax", 
+				"HighMin" = excluded."HighMin", 
+				"HighAvg" = excluded."HighAvg", 
+				"HighCount" = excluded."HighCount", 
+				"LowMax" = excluded."LowMax", 
+				"LowMin" = excluded."LowMin", 
+				"LowAvg" = excluded."LowAvg", 
+				"LowCount" = excluded."LowCount", 
+				"VolumeMax" = excluded."VolumeMax", 
+				"VolumeMin" = excluded."VolumeMin", 
+				"VolumeAvg" = excluded."VolumeAvg", 
+				"VolumeCount" = excluded."VolumeCount"
+			`, symbol, timestamp)
+
+			if err != nil {
+				return fmt.Errorf("failed to update 52 week candle %v %v: %w", symbol, timestamp, err)
+			}
+
+			updates++
+		}
+		lg.Default(struct {
+			Message    string
+			Symbol     string
+			Timestamps []time.Time
+		}{
+			Message:    fmt.Sprintf("successfully updated %d affected 52wk candles for symbol %s", len(timestamps), symbol),
+			Symbol:     symbol,
+			Timestamps: timestamps,
+		})
+	}
+
+	lg.Defaultf("successfully updated %d affected 52wk candles for %d symbols", updates, len(affected))
+	return nil
+}
+
+func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) (map[string][]time.Time, error) {
+	rs, err := tx.Query(ctx, `
+		SELECT
+			affected."Symbol",
+			affected."Timestamp"
+		FROM src."Candles" modified
+		JOIN src."Candles" affected
+			ON modified."Symbol" = affected."Symbol"
+			AND affected."Timestamp" BETWEEN modified."Timestamp" - INTERVAL '52 week' AND modified."Timestamp" 
+		WHERE
+			modified."Timestamp" > $1
+		GROUP BY
+			affected."Symbol",
+			affected."Timestamp"
+		`, latestModification)
+	if err != nil {
+		return nil, fmt.Errorf("error while determining affected 52 week candles: %w", err)
+	}
+	defer rs.Close()
+
+	var ret = map[string][]time.Time{}
+	for rs.Next() {
+		var symbol string
+		var timestamp time.Time
+		err := rs.Scan(&symbol, &timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("error while reading affected 52 week candles: %w", err)
+		}
+
+		if _, ok := ret[symbol]; !ok {
+			ret[symbol] = []time.Time{timestamp}
+			continue
+		}
+
+		ret[symbol] = append(ret[symbol], timestamp)
+	}
+
+	return ret, nil
 }
 
 type StagingInfo struct {

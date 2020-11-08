@@ -180,7 +180,7 @@ var etlCmd = &cobra.Command{
 		}
 		lg.Defaultf("successfully staged %d candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
 
-		si, err = stage.Candles52Wk(ctx, tx, si.PreviousLatestModification)
+		si, err = stage.Candles52Wk(ctx, lg, tx, si.PreviousLatestModification)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
 		}

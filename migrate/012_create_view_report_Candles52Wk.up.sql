@@ -1,4 +1,3 @@
-DROP VIEW IF EXISTS src."Candles52Wk";
 CREATE VIEW report."Candles52Wk" AS
 SELECT "Symbol",
        "Timestamp",
