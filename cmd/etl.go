@@ -61,15 +61,15 @@ var etlCmd = &cobra.Command{
 		lg, cleanup := logger()
 		defer cleanup()
 
-		ctx := context.Background()
-
-		tx, cleanup, err := openTx(ctx)
+		tx, cleanup, err := openTx(context.Background())
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to setup database transaction: %w", err)))
 		}
 		defer cleanup()
 
-		ess, err := requestStocks(timeoutCtx(ctx, time.Minute), lg)
+		ctx := context.Background()
+
+		ess, err := requestStocks(timeoutCtx(ctx, 5*time.Minute), lg)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
 		}
