@@ -30,26 +30,70 @@ import (
 	"time"
 
 	"github.com/ajjensen13/stocker/internal/extract"
+	"github.com/ajjensen13/stocker/internal/load"
+	"github.com/ajjensen13/stocker/internal/model"
+	"github.com/ajjensen13/stocker/internal/stage"
+	"github.com/ajjensen13/stocker/internal/transform"
 )
 
 func timezone() (tz *time.Location, err error) {
 	panic(wire.Build(provideTimezone, provideAppConfig))
 }
 
-func requestStocks(ctx context.Context, lg gke.Logger) (ss []finnhub.Stock, err error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideStocks))
+func extractStocks(ctx context.Context, lg gke.Logger) (ss []finnhub.Stock, err error) {
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoffMedium, provideBackoffNotifier, provideApiAuthContext, provideStocks))
 }
 
-func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (sc finnhub.StockCandles, err error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock, provideTimezone))
+func transformStocks(es finnhub.Stock, ec finnhub.StockCandles, tz *time.Location) model.Stock {
+	panic(wire.Build(transform.Stock))
 }
 
-func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (cp finnhub.CompanyProfile2, err error) {
-	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideBackoff, provideBackoffNotifier, provideApiAuthContext, provideCompanyProfiles))
+func loadStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Stock) (err error) {
+	panic(wire.Build(load.Stocks, provideBackoffMedium, provideBackoffNotifier))
+}
+
+func stageStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx) (si stage.StagingInfo, err error) {
+	panic(wire.Build(stage.Stocks, provideBackoffMedium, provideBackoffNotifier))
+}
+
+func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (sc finnhub.StockCandles, err error) {
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoffShort, provideBackoffNotifier, provideApiAuthContext, provideCandles, provideCandleConfig, provideLatestStock, provideTimezone))
+}
+
+func transformCandles(es finnhub.Stock, ec finnhub.StockCandles, tz *time.Location) ([]model.Candle, error) {
+	panic(wire.Build(transform.Candles))
+}
+
+func loadCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Candle) (err error) {
+	panic(wire.Build(load.Candles, provideBackoffMedium, provideBackoffNotifier))
+}
+
+func stageCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (si stage.StagingInfo, err error) {
+	panic(wire.Build(stage.Candles, provideBackoffMedium, provideBackoffNotifier))
+}
+
+func stage52WkCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time) (si stage.StagingInfo, err error) {
+	panic(wire.Build(stage.Candles52Wk, provideBackoffLong, provideBackoffNotifier))
+}
+
+func extractCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (cp finnhub.CompanyProfile2, err error) {
+	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideBackoffShort, provideBackoffNotifier, provideApiAuthContext, provideCompanyProfiles))
+}
+
+func transformCompanyProfile(ecp finnhub.CompanyProfile2) (model.CompanyProfile, error) {
+	panic(wire.Build(transform.CompanyProfile))
+}
+
+func loadCompanyProfile(ctx context.Context, lg gke.Logger, tx pgx.Tx, cp model.CompanyProfile) (err error) {
+	panic(wire.Build(load.CompanyProfile, provideBackoffShort, provideBackoffNotifier))
+}
+
+func stageCompanyProfiles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (si stage.StagingInfo, err error) {
+	panic(wire.Build(stage.CompanyProfiles, provideBackoffMedium, provideBackoffNotifier))
 }
 
 func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (ls latestStocks, err error) {
-	panic(wire.Build(extract.LatestStocks, provideLatestStocks))
+	panic(wire.Build(extract.LatestStocks, provideLatestStocks, provideBackoffMedium, provideBackoffNotifier))
 }
 
 func dataSourceName() (dsn *url.URL, err error) {

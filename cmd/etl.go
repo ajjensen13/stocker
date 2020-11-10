@@ -26,9 +26,7 @@ import (
 
 	"github.com/ajjensen13/gke"
 
-	"github.com/ajjensen13/stocker/internal/load"
 	"github.com/ajjensen13/stocker/internal/model"
-	"github.com/ajjensen13/stocker/internal/stage"
 	"github.com/ajjensen13/stocker/internal/transform"
 )
 
@@ -69,7 +67,7 @@ var etlCmd = &cobra.Command{
 
 		ctx := context.Background()
 
-		ess, err := requestStocks(timeoutCtx(ctx, 5*time.Minute), lg)
+		ess, err := extractStocks(ctx, lg)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
 		}
@@ -79,7 +77,7 @@ var etlCmd = &cobra.Command{
 			panic(lg.ErrorErr(fmt.Errorf("failed to reduce result set using skip and limit: %w", err)))
 		}
 
-		latest, err := queryMostRecentCandles(timeoutCtx(ctx, time.Minute), lg, tx)
+		latest, err := queryMostRecentCandles(ctx, lg, tx)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to get latest stocks: %w", err)))
 		}
@@ -94,7 +92,7 @@ var etlCmd = &cobra.Command{
 			tss = append(tss, transform.Stock(es))
 		}
 
-		err = load.Stocks(timeoutCtx(ctx, time.Minute), tx, tss)
+		err = loadStocks(ctx, lg, tx, tss)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to load stocks into database: %w", err)))
 		}
@@ -115,19 +113,19 @@ var etlCmd = &cobra.Command{
 			case <-ctx.Done():
 				panic(lg.WarningErr(fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())))
 			case <-throttler.C:
-				ec, err := requestCandles(timeoutCtx(ctx, time.Minute), lg, es, latest)
+				ec, err := extractCandles(ctx, lg, es, latest)
 				if err != nil {
 					_ = lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err))
 					_ = lg.Infof("stock candles %q will be skipped due to error", es.Symbol)
 					continue
 				}
 
-				tcs, err := transform.Candles(es, ec, tz)
+				tcs, err := transformCandles(es, ec, tz)
 				if err != nil {
 					panic(lg.ErrorErr(fmt.Errorf("failed to transform stock candles %q: %w", es.Symbol, err)))
 				}
 
-				err = load.Candles(timeoutCtx(ctx, time.Minute), tx, tcs)
+				err = loadCandles(ctx, lg, tx, tcs)
 				if err != nil {
 					panic(lg.ErrorErr(fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)))
 				}
@@ -141,19 +139,19 @@ var etlCmd = &cobra.Command{
 			case <-ctx.Done():
 				panic(lg.WarningErr(fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())))
 			case <-throttler.C:
-				ecp, err := requestCompanyProfile(timeoutCtx(ctx, time.Minute), lg, es)
+				ecp, err := extractCompanyProfile(ctx, lg, es)
 				if err != nil {
 					_ = lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err))
 					_ = lg.Infof("company profile %q will be skipped due to error", es.Symbol)
 					continue
 				}
 
-				tcp, err := transform.CompanyProfile(ecp)
+				tcp, err := transformCompanyProfile(ecp)
 				if err != nil {
 					panic(lg.ErrorErr(fmt.Errorf("failed to transform company profile %q: %w", es.Symbol, err)))
 				}
 
-				err = load.CompanyProfile(timeoutCtx(ctx, time.Minute), tx, tcp)
+				err = loadCompanyProfile(ctx, lg, tx, tcp)
 				if err != nil {
 					panic(lg.ErrorErr(fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)))
 				}
@@ -162,25 +160,25 @@ var etlCmd = &cobra.Command{
 			}
 		}
 
-		si, err := stage.Stocks(timeoutCtx(ctx, time.Hour), tx)
+		si, err := stageStocks(ctx, lg, tx)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to stage stocks: %w", err)))
 		}
 		lg.Defaultf("successfully staged %d stocks (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
 
-		si, err = stage.CompanyProfile(timeoutCtx(ctx, time.Hour), tx)
+		si, err = stageCompanyProfiles(ctx, lg, tx)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to stage company profiles: %w", err)))
 		}
 		lg.Defaultf("successfully staged %d company profiles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
 
-		si, err = stage.Candles(timeoutCtx(ctx, time.Hour), tx)
+		si, err = stageCandles(ctx, lg, tx)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
 		}
 		lg.Defaultf("successfully staged %d candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
 
-		si, err = stage.Candles52Wk(timeoutCtx(ctx, time.Hour), lg, tx, si.PreviousLatestModification)
+		si, err = stage52WkCandles(ctx, lg, tx, si.PreviousLatestModification)
 		if err != nil {
 			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
 		}
@@ -193,11 +191,6 @@ var etlCmd = &cobra.Command{
 
 		lg.Defaultf("committed database transaction")
 	},
-}
-
-func timeoutCtx(ctx context.Context, timeout time.Duration) context.Context {
-	ret, _ := context.WithTimeout(ctx, timeout)
-	return ret
 }
 
 func skipAndLimit(cmd *cobra.Command, lg gke.Logger, ess []finnhub.Stock) ([]finnhub.Stock, error) {

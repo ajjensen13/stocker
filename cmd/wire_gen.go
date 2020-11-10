@@ -10,6 +10,10 @@ import (
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/gke"
 	"github.com/ajjensen13/stocker/internal/extract"
+	"github.com/ajjensen13/stocker/internal/load"
+	"github.com/ajjensen13/stocker/internal/model"
+	"github.com/ajjensen13/stocker/internal/stage"
+	"github.com/ajjensen13/stocker/internal/transform"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v4"
 	"net/url"
@@ -35,14 +39,14 @@ func timezone() (*time.Location, error) {
 	return location, nil
 }
 
-func requestStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
+func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return nil, err
 	}
 	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
-	backOff := provideBackoff()
+	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
@@ -55,14 +59,36 @@ func requestStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) 
 	return v, nil
 }
 
-func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
+func transformStocks(es finnhub.Stock, ec finnhub.StockCandles, tz *time.Location) model.Stock {
+	stock := transform.Stock(es)
+	return stock
+}
+
+func loadStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Stock) error {
+	backOff := provideBackoffMedium()
+	notify := provideBackoffNotifier(lg)
+	error2 := load.Stocks(ctx, tx, ss, backOff, notify)
+	return error2
+}
+
+func stageStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx) (stage.StagingInfo, error) {
+	backOff := provideBackoffMedium()
+	notify := provideBackoffNotifier(lg)
+	stagingInfo, err := stage.Stocks(ctx, tx, backOff, notify)
+	if err != nil {
+		return stage.StagingInfo{}, err
+	}
+	return stagingInfo, nil
+}
+
+func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return finnhub.StockCandles{}, err
 	}
 	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
-	backOff := provideBackoff()
+	backOff := provideBackoffShort()
 	notify := provideBackoffNotifier(lg)
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
@@ -81,14 +107,49 @@ func requestCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 	return stockCandles, nil
 }
 
-func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+func transformCandles(es finnhub.Stock, ec finnhub.StockCandles, tz *time.Location) ([]model.Candle, error) {
+	v, err := transform.Candles(es, ec, tz)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+func loadCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Candle) error {
+	backOff := provideBackoffMedium()
+	notify := provideBackoffNotifier(lg)
+	error2 := load.Candles(ctx, tx, ss, backOff, notify)
+	return error2
+}
+
+func stageCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (stage.StagingInfo, error) {
+	backOff := provideBackoffMedium()
+	notify := provideBackoffNotifier(lg)
+	stagingInfo, err := stage.Candles(ctx, tx, backOff, notify)
+	if err != nil {
+		return stage.StagingInfo{}, err
+	}
+	return stagingInfo, nil
+}
+
+func stage52WkCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time) (stage.StagingInfo, error) {
+	backOff := provideBackoffLong()
+	notify := provideBackoffNotifier(lg)
+	stagingInfo, err := stage.Candles52Wk(ctx, lg, tx, latestModification, backOff, notify)
+	if err != nil {
+		return stage.StagingInfo{}, err
+	}
+	return stagingInfo, nil
+}
+
+func extractCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return finnhub.CompanyProfile2{}, err
 	}
 	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
-	backOff := provideBackoff()
+	backOff := provideBackoffShort()
 	notify := provideBackoffNotifier(lg)
 	companyProfile2, err := provideCompanyProfiles(cmdApiAuthContext, lg, defaultApiService, backOff, notify, stock)
 	if err != nil {
@@ -97,8 +158,35 @@ func requestCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Sto
 	return companyProfile2, nil
 }
 
+func transformCompanyProfile(ecp finnhub.CompanyProfile2) (model.CompanyProfile, error) {
+	companyProfile, err := transform.CompanyProfile(ecp)
+	if err != nil {
+		return model.CompanyProfile{}, err
+	}
+	return companyProfile, nil
+}
+
+func loadCompanyProfile(ctx context.Context, lg gke.Logger, tx pgx.Tx, cp model.CompanyProfile) error {
+	backOff := provideBackoffShort()
+	notify := provideBackoffNotifier(lg)
+	error2 := load.CompanyProfile(ctx, tx, cp, backOff, notify)
+	return error2
+}
+
+func stageCompanyProfiles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (stage.StagingInfo, error) {
+	backOff := provideBackoffMedium()
+	notify := provideBackoffNotifier(lg)
+	stagingInfo, err := stage.CompanyProfiles(ctx, tx, backOff, notify)
+	if err != nil {
+		return stage.StagingInfo{}, err
+	}
+	return stagingInfo, nil
+}
+
 func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
-	v, err := extract.LatestStocks(ctx, tx)
+	backOff := provideBackoffMedium()
+	notify := provideBackoffNotifier(lg)
+	v, err := extract.LatestStocks(ctx, tx, backOff, notify)
 	if err != nil {
 		return nil, err
 	}

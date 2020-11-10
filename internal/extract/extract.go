@@ -28,11 +28,16 @@ import (
 	"io/ioutil"
 	"net/http"
 	"time"
+
+	"github.com/ajjensen13/stocker/internal/util"
 )
 
 func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, exchange string) ([]finnhub.Stock, error) {
 	var result []finnhub.Stock
 	err := backoff.RetryNotify(func() error {
+		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
+		defer cancel()
+
 		ss, resp, err := client.StockSymbols(ctx, exchange)
 		if err != nil {
 			return handleErr("error while getting stocks", resp, err)
@@ -47,6 +52,9 @@ func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.B
 func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, startDate, endDate time.Time) (finnhub.StockCandles, error) {
 	var result finnhub.StockCandles
 	err := backoff.RetryNotify(func() error {
+		ctx, cancel := context.WithTimeout(ctx, util.ShortReqTimeout)
+		defer cancel()
+
 		c, resp, err := client.StockCandles(ctx, stock.Symbol, resolution, startDate.Unix(), endDate.Unix(), nil)
 		if err != nil {
 			return handleErr(fmt.Sprintf("error while getting candle for stock %q", stock.Symbol), resp, err)
@@ -61,6 +69,9 @@ func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.
 func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
 	var result finnhub.CompanyProfile2
 	err := backoff.RetryNotify(func() error {
+		ctx, cancel := context.WithTimeout(ctx, util.ShortReqTimeout)
+		defer cancel()
+
 		c, resp, err := client.CompanyProfile2(ctx, &finnhub.CompanyProfile2Opts{Symbol: optional.NewString(stock.Symbol)})
 		if err != nil {
 			return handleErr(fmt.Sprintf("error while getting company profile %q", stock.Symbol), resp, err)
@@ -72,24 +83,35 @@ func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo b
 	return result, err
 }
 
-func LatestStocks(ctx context.Context, tx pgx.Tx) (map[string]time.Time, error) {
-	rows, err := tx.Query(ctx, `SELECT DISTINCT "Symbol", MAX("Timestamp") FROM src."Candles" GROUP BY "Symbol"`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query latest stocks: %w", err)
-	}
+func LatestStocks(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
+	var ret map[string]time.Time
+	err := backoff.RetryNotify(func() error {
+		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
+		defer cancel()
 
-	result := make(map[string]time.Time)
-	for rows.Next() {
-		var symbol string
-		var timestamp time.Time
-		err := rows.Scan(&symbol, &timestamp)
+		rows, err := tx.Query(ctx, `SELECT DISTINCT "Symbol", MAX("Timestamp") FROM src."Candles" GROUP BY "Symbol"`)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse latest stocks: %w", err)
+			return fmt.Errorf("failed to query latest stocks: %w", err)
 		}
-		result[symbol] = timestamp
+
+		ret = make(map[string]time.Time)
+		for rows.Next() {
+			var symbol string
+			var timestamp time.Time
+			err := rows.Scan(&symbol, &timestamp)
+			if err != nil {
+				return fmt.Errorf("failed to parse latest stocks: %w", err)
+			}
+			ret[symbol] = timestamp
+		}
+		return nil
+	}, bo, bon)
+
+	if err != nil {
+		return nil, err
 	}
 
-	return result, nil
+	return ret, nil
 }
 
 var ErrToManyRequests = errors.New("error: too many requests")

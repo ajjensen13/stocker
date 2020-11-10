@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ajjensen13/stocker/internal/extract"
+	"github.com/ajjensen13/stocker/internal/util"
 )
 
 func provideTimezone(appConfig *appConfig) (*time.Location, error) {
@@ -75,10 +76,24 @@ func provideDbSecrets() (*url.Userinfo, error) {
 	return ui, nil
 }
 
-func provideBackoff() backoff.BackOff {
+func provideBackoffShort() backoff.BackOff {
 	result := backoff.NewExponentialBackOff()
 	result.InitialInterval = time.Second
-	result.MaxElapsedTime = time.Minute
+	result.MaxElapsedTime = util.ShortReqTimeout * 5
+	return result
+}
+
+func provideBackoffMedium() backoff.BackOff {
+	result := backoff.NewExponentialBackOff()
+	result.InitialInterval = time.Second
+	result.MaxElapsedTime = util.MedReqTimeout * 5
+	return result
+}
+
+func provideBackoffLong() backoff.BackOff {
+	result := backoff.NewExponentialBackOff()
+	result.InitialInterval = time.Second
+	result.MaxElapsedTime = util.LongReqTimeout * 5
 	return result
 }
 
