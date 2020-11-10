@@ -100,7 +100,10 @@ func handleErr(msg string, resp *http.Response, err error) error {
 		return fmt.Errorf("%s: %w", msg, ErrToManyRequests)
 	default:
 		defer resp.Body.Close()
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, err2 := ioutil.ReadAll(resp.Body)
+		if err2 != nil {
+			return fmt.Errorf("error while to parsing error response %v. %s: %w", err2, msg, err)
+		}
 		return fmt.Errorf("%s: %w (%s)", msg, err, string(body))
 	}
 }
