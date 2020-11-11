@@ -68,11 +68,11 @@ func loadCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Candl
 	panic(wire.Build(load.Candles, provideBackoffMedium, provideBackoffNotifier))
 }
 
-func stageCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (si stage.StagingInfo, err error) {
+func stageCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, symbol string) (si stage.StagingInfo, err error) {
 	panic(wire.Build(stage.Candles, provideBackoffMedium, provideBackoffNotifier))
 }
 
-func stage52WkCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time) (si stage.StagingInfo, err error) {
+func stage52WkCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, symbol string, latestModification time.Time) (si stage.StagingInfo, err error) {
 	panic(wire.Build(stage.Candles52Wk, provideBackoffLong, provideBackoffNotifier))
 }
 

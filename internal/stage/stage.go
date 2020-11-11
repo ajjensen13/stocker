@@ -28,13 +28,18 @@ import (
 	"github.com/ajjensen13/stocker/internal/util"
 )
 
-func latestModification(ctx context.Context, tx pgx.Tx, table string, bo backoff.BackOff, bon backoff.Notify) (time.Time, error) {
+func latestModification(ctx context.Context, tx pgx.Tx, table string, bo backoff.BackOff, bon backoff.Notify, where string, params ...interface{}) (time.Time, error) {
 	var ret time.Time
 	err := backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, util.ShortReqTimeout)
 		defer cancel()
 
-		rows, err := tx.Query(ctx, `SELECT MAX("Modified") FROM `+table)
+		qry := fmt.Sprintf(`SELECT MAX("Modified") FROM %s`, table)
+		if where != "" {
+			qry = fmt.Sprintf("%s WHERE %s", qry, where)
+		}
+
+		rows, err := tx.Query(ctx, qry, params...)
 		if err != nil {
 			return fmt.Errorf("failed to query latest %s modification: %w", table, err)
 		}
@@ -68,7 +73,7 @@ func latestModification(ctx context.Context, tx pgx.Tx, table string, bo backoff
 }
 
 func Stocks(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
-	l, err := latestModification(ctx, tx, `stage."Stocks"`, bo, bon)
+	l, err := latestModification(ctx, tx, `stage."Stocks"`, bo, bon, "")
 	if err != nil {
 		return StagingInfo{}, err
 	}
@@ -95,8 +100,8 @@ func Stocks(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Noti
 	return StagingInfo{PreviousLatestModification: l, RowsAffected: rowsAffected}, nil
 }
 
-func Candles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
-	l, err := latestModification(ctx, tx, `stage."Candles"`, bo, bon)
+func Candles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify, symbol string) (StagingInfo, error) {
+	l, err := latestModification(ctx, tx, `stage."Candles"`, bo, bon, `"Symbol" = $1`, symbol)
 	if err != nil {
 		return StagingInfo{}, err
 	}
@@ -124,7 +129,7 @@ func Candles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Not
 }
 
 func CompanyProfiles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
-	l, err := latestModification(ctx, tx, `stage."CompanyProfiles"`, bo, bon)
+	l, err := latestModification(ctx, tx, `stage."CompanyProfiles"`, bo, bon, "")
 	if err != nil {
 		return StagingInfo{}, err
 	}
@@ -151,17 +156,17 @@ func CompanyProfiles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon bac
 	return StagingInfo{PreviousLatestModification: l, RowsAffected: rowsAffected}, nil
 }
 
-func Candles52Wk(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
+func Candles52Wk(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time, symbol string, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
 	var rowsAffected int64
 	err := backoff.RetryNotify(util.WrapWithSavePoint(ctx, tx, func() error {
 		ctx, cancel := context.WithTimeout(ctx, util.LongReqTimeout)
 		defer cancel()
 
-		affected, cnt, err := calcAffected(ctx, tx, latestModification)
+		affected, cnt, err := calcAffected(ctx, tx, symbol, latestModification)
 		if err != nil {
 			return err
 		}
-		lg.Defaultf("successfully calculated %d affected 52wk candles", cnt)
+		lg.Defaultf("successfully calculated %d affected 52wk candles for symbol %s", cnt, symbol)
 
 		r, err := updateAffected(ctx, lg, tx, affected)
 		if err != nil {
@@ -245,7 +250,7 @@ func updateAffected(ctx context.Context, lg gke.Logger, tx pgx.Tx, affected map[
 	return updates, nil
 }
 
-func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) (map[string][]time.Time, int64, error) {
+func calcAffected(ctx context.Context, tx pgx.Tx, symbol string, latestModification time.Time) (map[string][]time.Time, int64, error) {
 	var cnt int64
 	rs, err := tx.Query(ctx, `
 		SELECT
@@ -256,11 +261,12 @@ func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) 
 			ON modified."Symbol" = affected."Symbol"
 			AND affected."Timestamp" BETWEEN modified."Timestamp" - INTERVAL '52 week' AND modified."Timestamp" 
 		WHERE
-			modified."Timestamp" > $1
+			modified."Symbol" = $1
+			AND modified."Timestamp" > $2
 		GROUP BY
 			affected."Symbol",
 			affected."Timestamp"
-		`, latestModification)
+		`, symbol, latestModification)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error while determining affected 52 week candles: %w", err)
 	}

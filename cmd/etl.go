@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
+	"golang.org/x/sync/errgroup"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -36,6 +38,207 @@ const (
 	apiSecretName = "stocker-api-secret.json"
 )
 
+// etlCmd represents the etl command
+var etlCmd = &cobra.Command{
+	Use:   "etl",
+	Short: "runs a stocker etl",
+	Long:  ``,
+	Run: func(cmd *cobra.Command, args []string) {
+		lg, cleanupLogger := logger()
+		defer cleanupLogger()
+
+		throttler := time.NewTicker(time.Second)
+		defer throttler.Stop()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+		defer cancel()
+
+		grp, ctx := errgroup.WithContext(ctx)
+		grp.Go(func() error {
+			ess, err := processStocks(ctx, cmd, lg, throttler)
+			if err != nil {
+				return err
+			}
+
+			grp.Go(func() error {
+				return processCandles(ctx, lg, append([]finnhub.Stock{}, ess...), throttler)
+			})
+
+			grp.Go(func() error {
+				return processCompanyProfiles(ctx, lg, append([]finnhub.Stock{}, ess...), throttler)
+			})
+
+			return nil
+		})
+
+		err := grp.Wait()
+		if err != nil {
+			handleErr(lg, err, cancel, throttler.Stop, cleanupLogger)
+		}
+
+		lg.Info("committed database transaction")
+	},
+}
+
+func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, throttler *time.Ticker) ([]finnhub.Stock, error) {
+	tx, cleanup, err := openTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup database transaction for stock processing: %w", err)
+	}
+	defer cleanup()
+
+	<-throttler.C
+	ess, err := extractStocks(ctx, lg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)
+	}
+	lg.Info(gke.NewFmtMsgData("successfully extracted %d stocks", len(ess)))
+
+	ess, err = skipAndLimit(cmd, lg, ess)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reduce result set using skip and limit: %w", err)
+	}
+
+	tss := make([]model.Stock, 0, len(ess))
+	for _, es := range ess {
+		if es.Symbol == "" {
+			lg.Warningf("skipping stock without symbol: %v", es)
+			continue
+		}
+		tss = append(tss, transform.Stock(es))
+	}
+
+	err = loadStocks(ctx, lg, tx, tss)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load stocks into database: %w", err)
+	}
+	lg.Info(gke.NewFmtMsgData("successfully loaded %d stocks", len(tss)))
+
+	si, err := stageStocks(ctx, lg, tx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stage stocks: %w", err)
+	}
+	lg.Infof("successfully staged %d stocks (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error while committing stock processing database transaction: %w", err)
+	}
+
+	return ess, nil
+}
+
+func processCompanyProfiles(ctx context.Context, lg gke.Logger, ess []finnhub.Stock, throttler *time.Ticker) error {
+	tx, cleanup, err := openTx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to setup database transaction for company profile processing: %w", err)
+	}
+	defer cleanup()
+
+	for _, es := range ess {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())
+		case <-throttler.C:
+			ecp, err := extractCompanyProfile(ctx, lg, es)
+			if err != nil {
+				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err))
+				_ = lg.Infof("company profile %q will be skipped due to error", es.Symbol)
+				continue
+			}
+
+			tcp, err := transformCompanyProfile(ecp)
+			if err != nil {
+				return fmt.Errorf("failed to transform company profile %q: %w", es.Symbol, err)
+			}
+
+			err = loadCompanyProfile(ctx, lg, tx, tcp)
+			if err != nil {
+				return fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)
+			}
+
+			lg.Defaultf("requested & loaded company profile from finnhub into database: %q", es.Symbol)
+		}
+	}
+
+	si, err := stageCompanyProfiles(ctx, lg, tx)
+	if err != nil {
+		return fmt.Errorf("failed to stage company profiles: %w", err)
+	}
+	lg.Defaultf("successfully staged %d company profiles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return fmt.Errorf("error while committing company profile processing database transaction: %w", err)
+	}
+
+	return nil
+}
+
+func processCandles(ctx context.Context, lg gke.Logger, ess []finnhub.Stock, throttler *time.Ticker) error {
+	tx, cleanup, err := openTx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to setup database transaction for candle processing: %w", err)
+	}
+	defer cleanup()
+
+	latest, err := queryMostRecentCandles(ctx, lg, tx)
+	if err != nil {
+		return fmt.Errorf("failed to get latest stocks: %w", err)
+	}
+	lg.Default(gke.NewFmtMsgData("extracted %d existing stocks from database", len(latest)))
+
+	tz, err := timezone()
+	if err != nil {
+		return fmt.Errorf("failed to get timezone: %w", err)
+	}
+	lg.Default(gke.NewFmtMsgData("using %v timezone to store data", tz))
+
+	for _, es := range ess {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())
+		case <-throttler.C:
+			ec, err := extractCandles(ctx, lg, es, latest)
+			if err != nil {
+				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err))
+				_ = lg.Infof("stock candles %q will be skipped due to error", es.Symbol)
+				continue
+			}
+
+			tcs, err := transformCandles(es, ec, tz)
+			if err != nil {
+				return fmt.Errorf("failed to transform stock candles %q: %w", es.Symbol, err)
+			}
+
+			err = loadCandles(ctx, lg, tx, tcs)
+			if err != nil {
+				return fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)
+			}
+
+			si, err := stageCandles(ctx, lg, tx, es.Symbol)
+			if err != nil {
+				return fmt.Errorf("failed to stage candles for symbol %s: %w", es.Symbol, err)
+			}
+			lg.Defaultf("successfully staged %d candles for symbol %s (previous latest modification: %v)", si.RowsAffected, es.Symbol, si.PreviousLatestModification)
+
+			lg.Defaultf("requested & loaded %d stock candles from finnhub into database: %s", len(tcs), es.Symbol)
+			si, err = stage52WkCandles(ctx, lg, tx, es.Symbol, si.PreviousLatestModification)
+			if err != nil {
+				return fmt.Errorf("failed to stage candles: %w", err)
+			}
+			lg.Defaultf("successfully staged %d 52wk candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+		}
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return fmt.Errorf("error while committing candle processing database transaction: %w", err)
+	}
+
+	return nil
+}
+
 type appConfig struct {
 	Exchange           string    `json:"exchange"`
 	Resolution         string    `json:"resolution"`
@@ -50,147 +253,19 @@ type appSecrets struct {
 	ApiKey string `json:"api_key"`
 }
 
-// etlCmd represents the etl command
-var etlCmd = &cobra.Command{
-	Use:   "etl",
-	Short: "runs a stocker etl",
-	Long:  ``,
-	Run: func(cmd *cobra.Command, args []string) {
-		lg, cleanup := logger()
-		defer cleanup()
-
-		tx, cleanup, err := openTx(context.Background())
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to setup database transaction: %w", err)))
+func handleErr(lg gke.Logger, err error, cleanups ...func()) {
+	defer os.Exit(2)
+	defer func() {
+		for _, cleanup := range cleanups {
+			cleanup()
 		}
-		defer cleanup()
+	}()
 
-		ctx := context.Background()
-
-		ess, err := extractStocks(ctx, lg)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)))
-		}
-
-		ess, err = skipAndLimit(cmd, lg, ess)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to reduce result set using skip and limit: %w", err)))
-		}
-
-		latest, err := queryMostRecentCandles(ctx, lg, tx)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to get latest stocks: %w", err)))
-		}
-		lg.Default(gke.NewFmtMsgData("extracted %d existing stocks from database", len(latest)))
-
-		tss := make([]model.Stock, 0, len(ess))
-		for _, es := range ess {
-			if es.Symbol == "" {
-				lg.Warningf("skipping stock without symbol: %v", es)
-				continue
-			}
-			tss = append(tss, transform.Stock(es))
-		}
-
-		err = loadStocks(ctx, lg, tx, tss)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to load stocks into database: %w", err)))
-		}
-		lg.Default(gke.NewFmtMsgData("extracted & loaded %d stocks", len(tss)))
-
-		throttler := time.NewTicker(time.Second)
-		defer throttler.Stop()
-
-		tz, err := timezone()
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to get timezone: %w", err)))
-		}
-		lg.Default(gke.NewFmtMsgData("using %v timezone to store data", tz))
-
-		<-throttler.C
-		for _, es := range ess {
-			select {
-			case <-ctx.Done():
-				panic(lg.WarningErr(fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())))
-			case <-throttler.C:
-				ec, err := extractCandles(ctx, lg, es, latest)
-				if err != nil {
-					_ = lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err))
-					_ = lg.Infof("stock candles %q will be skipped due to error", es.Symbol)
-					continue
-				}
-
-				tcs, err := transformCandles(es, ec, tz)
-				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to transform stock candles %q: %w", es.Symbol, err)))
-				}
-
-				err = loadCandles(ctx, lg, tx, tcs)
-				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)))
-				}
-
-				lg.Defaultf("requested & loaded %d stock candles from finnhub into database: %s", len(tcs), es.Symbol)
-			}
-		}
-
-		for _, es := range ess {
-			select {
-			case <-ctx.Done():
-				panic(lg.WarningErr(fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())))
-			case <-throttler.C:
-				ecp, err := extractCompanyProfile(ctx, lg, es)
-				if err != nil {
-					_ = lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err))
-					_ = lg.Infof("company profile %q will be skipped due to error", es.Symbol)
-					continue
-				}
-
-				tcp, err := transformCompanyProfile(ecp)
-				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to transform company profile %q: %w", es.Symbol, err)))
-				}
-
-				err = loadCompanyProfile(ctx, lg, tx, tcp)
-				if err != nil {
-					panic(lg.ErrorErr(fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)))
-				}
-
-				lg.Defaultf("requested & loaded company profile from finnhub into database: %q", es.Symbol)
-			}
-		}
-
-		si, err := stageStocks(ctx, lg, tx)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to stage stocks: %w", err)))
-		}
-		lg.Defaultf("successfully staged %d stocks (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
-
-		si, err = stageCompanyProfiles(ctx, lg, tx)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to stage company profiles: %w", err)))
-		}
-		lg.Defaultf("successfully staged %d company profiles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
-
-		si, err = stageCandles(ctx, lg, tx)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
-		}
-		lg.Defaultf("successfully staged %d candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
-
-		si, err = stage52WkCandles(ctx, lg, tx, si.PreviousLatestModification)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("failed to stage candles: %w", err)))
-		}
-		lg.Defaultf("successfully staged %d 52wk candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
-
-		err = tx.Commit(ctx)
-		if err != nil {
-			panic(lg.ErrorErr(fmt.Errorf("error while committing database transaction: %w", err)))
-		}
-
-		lg.Defaultf("committed database transaction")
-	},
+	lg.Error(err)
+	err = lg.Flush()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func skipAndLimit(cmd *cobra.Command, lg gke.Logger, ess []finnhub.Stock) ([]finnhub.Stock, error) {

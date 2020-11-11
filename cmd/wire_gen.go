@@ -122,20 +122,20 @@ func loadCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Candl
 	return error2
 }
 
-func stageCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (stage.StagingInfo, error) {
+func stageCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, symbol string) (stage.StagingInfo, error) {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Candles(ctx, tx, backOff, notify)
+	stagingInfo, err := stage.Candles(ctx, tx, backOff, notify, symbol)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func stage52WkCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time) (stage.StagingInfo, error) {
+func stage52WkCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, symbol string, latestModification time.Time) (stage.StagingInfo, error) {
 	backOff := provideBackoffLong()
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Candles52Wk(ctx, lg, tx, latestModification, backOff, notify)
+	stagingInfo, err := stage.Candles52Wk(ctx, lg, tx, latestModification, symbol, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}

@@ -1,19 +1,28 @@
 module github.com/ajjensen13/stocker
 
-go 1.14
+go 1.15
 
 require (
-	github.com/Finnhub-Stock-API/finnhub-go v1.1.7
+	cloud.google.com/go v0.72.0 // indirect
+	cloud.google.com/go/logging v1.1.2 // indirect
+	cloud.google.com/go/storage v1.12.0 // indirect
+	github.com/Finnhub-Stock-API/finnhub-go v1.2.1
 	github.com/ajjensen13/config v0.0.16
 	github.com/ajjensen13/gke v0.0.47
 	github.com/antihax/optional v1.0.0
-	github.com/cenkalti/backoff/v4 v4.0.2
-	github.com/golang-migrate/migrate/v4 v4.12.1
+	github.com/cenkalti/backoff/v4 v4.1.0
+	github.com/golang-migrate/migrate/v4 v4.13.0
 	github.com/google/wire v0.4.0
-	github.com/jackc/pgproto3/v2 v2.0.4 // indirect
-	github.com/jackc/pgx/v4 v4.8.1
+	github.com/hashicorp/errwrap v1.1.0 // indirect
+	github.com/jackc/pgx/v4 v4.9.2
 	github.com/lib/pq v1.8.0 // indirect
-	github.com/spf13/cobra v1.0.0
-	github.com/spf13/pflag v1.0.5 // indirect
-	golang.org/x/crypto v0.0.0-20200728195943-123391ffb6de // indirect
+	github.com/spf13/cobra v1.1.1
+	golang.org/x/crypto v0.0.0-20201016220609-9e8e0b390897 // indirect
+	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
+	golang.org/x/oauth2 v0.0.0-20201109201403-9fd604954f58 // indirect
+	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
+	golang.org/x/sys v0.0.0-20201110211018-35f3e6cf4a65 // indirect
+	golang.org/x/tools v0.0.0-20201110201400-7099162a900a // indirect
+	google.golang.org/appengine v1.6.7 // indirect
+	google.golang.org/genproto v0.0.0-20201110150050-8816d57aaa9a // indirect
 )
