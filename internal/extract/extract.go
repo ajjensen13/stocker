@@ -117,15 +117,19 @@ func LatestStocks(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backof
 var ErrToManyRequests = errors.New("error: too many requests")
 
 func handleErr(msg string, resp *http.Response, err error) error {
-	switch resp.StatusCode {
-	case http.StatusTooManyRequests:
-		return fmt.Errorf("%s: %w", msg, ErrToManyRequests)
-	default:
+	switch {
+	case resp == nil:
+		break
+	case resp.StatusCode == http.StatusTooManyRequests:
+		err = fmt.Errorf("%s: %w", msg, ErrToManyRequests)
+	case resp.Body != nil:
 		defer resp.Body.Close()
-		body, err2 := ioutil.ReadAll(resp.Body)
-		if err2 != nil {
-			return fmt.Errorf("error while to parsing error response %v. %s: %w", err2, msg, err)
+		body, readErr := ioutil.ReadAll(resp.Body)
+		if readErr != nil {
+			msg = fmt.Sprintf("error while to parsing error response %v. %s", readErr, msg)
+			break
 		}
-		return fmt.Errorf("%s: %w (%s)", msg, err, string(body))
+		msg = fmt.Sprintf("%s (%s)", msg, body)
 	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
