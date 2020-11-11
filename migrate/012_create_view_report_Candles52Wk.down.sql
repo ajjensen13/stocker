@@ -1,1 +1,1 @@
-DROP VIEW report."Candles52Wk"
+DROP VIEW IF EXISTS report."Candles52Wk"

@@ -136,7 +136,7 @@ func CompanyProfiles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon bac
 		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
 		defer cancel()
 
-		r, err := tx.Exec(ctx, `INSERT INTO stage."CompanyProfiles" ("Exchange", "Symbol", "Country", "Currency", "Name", "Ipo", "MarketCapitalization", "SharesOutstanding", "Logo", "Phone", "WebUrl", "Industry", "Created", "Modified") SELECT "Exchange", "Symbol", "Country", "Currency", "Name", "Ipo", "MarketCapitalization", "SharesOutstanding", "Logo", "Phone", "WebUrl", "Industry", "Created", "Modified" FROM src."CompanyProfiles" WHERE "Modified" > $1 ON CONFLICT ("Exchange", "Symbol") DO UPDATE SET "Country" = excluded."Country", "Currency" = excluded."Currency", "Name" = excluded."Name", "Ipo" = excluded."Ipo", "MarketCapitalization" = excluded."MarketCapitalization", "SharesOutstanding" = excluded."SharesOutstanding", "Logo" = excluded."Logo", "Phone" = excluded."Phone", "WebUrl" = excluded."WebUrl", "Industry" = excluded."Industry", "Created" = excluded."Created", "Modified" = excluded."Modified"`, l)
+		r, err := tx.Exec(ctx, `INSERT INTO stage."CompanyProfiles" ("Symbol", "Exchange", "Country", "Currency", "Name", "Ipo", "MarketCapitalization", "SharesOutstanding", "Logo", "Phone", "WebUrl", "Industry", "Created", "Modified") SELECT "Symbol", "Exchange", "Country", "Currency", "Name", "Ipo", "MarketCapitalization", "SharesOutstanding", "Logo", "Phone", "WebUrl", "Industry", "Created", "Modified" FROM src."CompanyProfiles" WHERE "Modified" > $1 ON CONFLICT ("Symbol") DO UPDATE SET "Exchange" = excluded."Exchange", "Country" = excluded."Country", "Currency" = excluded."Currency", "Name" = excluded."Name", "Ipo" = excluded."Ipo", "MarketCapitalization" = excluded."MarketCapitalization", "SharesOutstanding" = excluded."SharesOutstanding", "Logo" = excluded."Logo", "Phone" = excluded."Phone", "WebUrl" = excluded."WebUrl", "Industry" = excluded."Industry", "Created" = excluded."Created", "Modified" = excluded."Modified"`, l)
 		if err != nil {
 			return fmt.Errorf("error while staging company profiles: %w", err)
 		}
@@ -157,11 +157,11 @@ func Candles52Wk(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModificati
 		ctx, cancel := context.WithTimeout(ctx, util.LongReqTimeout)
 		defer cancel()
 
-		affected, err := calcAffected(ctx, tx, latestModification)
+		affected, cnt, err := calcAffected(ctx, tx, latestModification)
 		if err != nil {
 			return err
 		}
-		lg.Defaultf("successfully calculated affected 52wk candles")
+		lg.Defaultf("successfully calculated %d affected 52wk candles", cnt)
 
 		r, err := updateAffected(ctx, lg, tx, affected)
 		if err != nil {
@@ -245,7 +245,8 @@ func updateAffected(ctx context.Context, lg gke.Logger, tx pgx.Tx, affected map[
 	return updates, nil
 }
 
-func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) (map[string][]time.Time, error) {
+func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) (map[string][]time.Time, int64, error) {
+	var cnt int64
 	rs, err := tx.Query(ctx, `
 		SELECT
 			affected."Symbol",
@@ -261,7 +262,7 @@ func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) 
 			affected."Timestamp"
 		`, latestModification)
 	if err != nil {
-		return nil, fmt.Errorf("error while determining affected 52 week candles: %w", err)
+		return nil, 0, fmt.Errorf("error while determining affected 52 week candles: %w", err)
 	}
 	defer rs.Close()
 
@@ -271,9 +272,10 @@ func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) 
 		var timestamp time.Time
 		err := rs.Scan(&symbol, &timestamp)
 		if err != nil {
-			return nil, fmt.Errorf("error while reading affected 52 week candles: %w", err)
+			return nil, 0, fmt.Errorf("error while reading affected 52 week candles: %w", err)
 		}
 
+		cnt++
 		if _, ok := ret[symbol]; !ok {
 			ret[symbol] = []time.Time{timestamp}
 			continue
@@ -282,7 +284,7 @@ func calcAffected(ctx context.Context, tx pgx.Tx, latestModification time.Time) 
 		ret[symbol] = append(ret[symbol], timestamp)
 	}
 
-	return ret, nil
+	return ret, cnt, nil
 }
 
 type StagingInfo struct {
