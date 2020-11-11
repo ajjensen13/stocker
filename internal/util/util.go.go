@@ -28,7 +28,7 @@ import (
 const (
 	ShortReqTimeout = 30 * time.Second
 	MedReqTimeout   = 5 * time.Minute
-	LongReqTimeout  = 60 * time.Minute
+	LongReqTimeout  = 12 * time.Hour
 )
 
 func WrapWithSavePoint(ctx context.Context, tx pgx.Tx, op backoff.Operation, sp string) backoff.Operation {

@@ -115,7 +115,7 @@ func provideBackoffMedium() backoff.BackOff {
 
 func provideBackoffLong() backoff.BackOff {
 	result := backoff.NewExponentialBackOff()
-	result.InitialInterval = time.Second
+	result.InitialInterval = time.Minute
 	result.MaxElapsedTime = util.LongReqTimeout * 5
 	return result
 }
