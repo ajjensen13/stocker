@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/ajjensen13/stocker/internal/extract"
@@ -42,13 +43,20 @@ func provideTimezone(appConfig *appConfig) (*time.Location, error) {
 	return time.LoadLocation(appConfig.Timezone)
 }
 
+var (
+	pkgAppSecrets     appSecrets
+	pkgAppSecretsErr  error
+	pkgAppSecretsOnce sync.Once
+)
+
 func provideAppSecrets() (*appSecrets, error) {
-	var result appSecrets
-	err := config.InterfaceJson(apiSecretName, &result)
-	if err != nil {
-		return nil, err
+	pkgAppSecretsOnce.Do(func() {
+		pkgAppSecretsErr = config.InterfaceJson(apiSecretName, &pkgAppSecrets)
+	})
+	if pkgAppSecretsErr != nil {
+		return nil, pkgAppSecretsErr
 	}
-	return &result, nil
+	return &pkgAppSecrets, nil
 }
 
 func provideApiServiceClient() *finnhub.DefaultApiService {
@@ -59,21 +67,36 @@ func provideApiAuthContext(ctx context.Context, secrets *appSecrets) apiAuthCont
 	return context.WithValue(ctx, finnhub.ContextAPIKey, finnhub.APIKey{Key: secrets.ApiKey})
 }
 
+var (
+	pkgAppConfig     appConfig
+	pkgAppConfigErr  error
+	pkgAppConfigOnce sync.Once
+)
+
 func provideAppConfig() (*appConfig, error) {
-	var result appConfig
-	err := config.InterfaceJson(appConfigName, &result)
-	if err != nil {
-		return nil, err
+	pkgAppConfigOnce.Do(func() {
+		pkgAppConfigErr = config.InterfaceJson(appConfigName, &pkgAppConfig)
+	})
+	if pkgAppConfigErr != nil {
+		return nil, pkgAppConfigErr
 	}
-	return &result, nil
+	return &pkgAppConfig, nil
 }
 
+var (
+	pkgDbSecrets     *url.Userinfo
+	pkgDbSecretsErr  error
+	pkgDbSecretsOnce sync.Once
+)
+
 func provideDbSecrets() (*url.Userinfo, error) {
-	ui, err := config.Userinfo(dbSecretName)
-	if err != nil {
-		return nil, err
+	pkgDbSecretsOnce.Do(func() {
+		pkgDbSecrets, pkgDbSecretsErr = config.Userinfo(dbSecretName)
+	})
+	if pkgDbSecretsErr != nil {
+		return nil, pkgDbSecretsErr
 	}
-	return ui, nil
+	return pkgDbSecrets, nil
 }
 
 func provideBackoffShort() backoff.BackOff {
