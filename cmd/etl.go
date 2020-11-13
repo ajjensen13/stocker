@@ -17,11 +17,11 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package cmd
 
 import (
+	"cloud.google.com/go/logging"
 	"context"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"golang.org/x/sync/errgroup"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,25 +47,25 @@ var etlCmd = &cobra.Command{
 		lg, cleanupLogger := logger()
 		defer cleanupLogger()
 
+		pkgCtx, pkgCancel := context.WithCancel(context.Background())
+		defer pkgCancel()
+
 		throttler := time.NewTicker(time.Second)
 		defer throttler.Stop()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
-		defer cancel()
-
-		grp, ctx := errgroup.WithContext(ctx)
+		grp, grpCtx := errgroup.WithContext(pkgCtx)
 		grp.Go(func() error {
-			ess, err := processStocks(ctx, cmd, lg, throttler)
+			ess, err := processStocks(grpCtx, cmd, lg, throttler)
 			if err != nil {
 				return err
 			}
 
 			grp.Go(func() error {
-				return processCandles(ctx, lg, append([]finnhub.Stock{}, ess...), throttler)
+				return processCandles(grpCtx, lg, append([]finnhub.Stock{}, ess...), throttler)
 			})
 
 			grp.Go(func() error {
-				return processCompanyProfiles(ctx, lg, append([]finnhub.Stock{}, ess...), throttler)
+				return processCompanyProfiles(grpCtx, lg, append([]finnhub.Stock{}, ess...), throttler)
 			})
 
 			return nil
@@ -73,7 +73,12 @@ var etlCmd = &cobra.Command{
 
 		err := grp.Wait()
 		if err != nil {
-			handleErr(lg, err, cancel, throttler.Stop, cleanupLogger)
+			lg.Warning("aborting database transaction")
+			err := lg.LogSync(pkgCtx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
+			if err != nil {
+				panic(err)
+			}
+			return
 		}
 
 		lg.Info("committed database transaction")
@@ -251,21 +256,6 @@ type appConfig struct {
 
 type appSecrets struct {
 	ApiKey string `json:"api_key"`
-}
-
-func handleErr(lg gke.Logger, err error, cleanups ...func()) {
-	defer os.Exit(2)
-	defer func() {
-		for _, cleanup := range cleanups {
-			cleanup()
-		}
-	}()
-
-	lg.Error(err)
-	err = lg.Flush()
-	if err != nil {
-		panic(err)
-	}
 }
 
 func skipAndLimit(cmd *cobra.Command, lg gke.Logger, ess []finnhub.Stock) ([]finnhub.Stock, error) {
