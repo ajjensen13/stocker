@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"golang.org/x/sync/errgroup"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,14 +44,14 @@ var etlCmd = &cobra.Command{
 	Short: "runs a stocker etl",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-		pkgLogger, cleanupLogger := logger()
+		logger, cleanupLogger := logger()
 		defer cleanupLogger()
 
-		pkgCtx, pkgCtxCancel := context.WithCancel(context.Background())
-		defer pkgCtxCancel()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-		err := func() error {
-			pool, poolCleanup, err := openPool(pkgCtx)
+		err := func(ctx context.Context) error {
+			pool, poolCleanup, err := openPool(ctx)
 			if err != nil {
 				return err
 			}
@@ -61,33 +60,29 @@ var etlCmd = &cobra.Command{
 			throttler := time.NewTicker(time.Second)
 			defer throttler.Stop()
 
-			grp, grpCtx := errgroup.WithContext(pkgCtx)
-			grp.Go(func() error {
-				ess, err := processStocks(grpCtx, cmd, pkgLogger, pool, throttler)
-				if err != nil {
-					return err
-				}
+			ess, err := processStocks(ctx, cmd, logger, pool, throttler)
+			if err != nil {
+				return err
+			}
 
-				grp.Go(func() error {
-					return processCandles(grpCtx, pkgLogger, pool, append([]finnhub.Stock{}, ess...), throttler)
-				})
+			err = processCandles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
+			if err != nil {
+				return err
+			}
 
-				grp.Go(func() error {
-					return processCompanyProfiles(grpCtx, pkgLogger, pool, append([]finnhub.Stock{}, ess...), throttler)
-				})
+			err = processCompanyProfiles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
+			if err != nil {
+				return err
+			}
 
-				return nil
-			})
-
-			return grp.Wait()
-		}()
+			return nil
+		}(ctx)
 
 		if err != nil {
-			err := pkgLogger.LogSync(pkgCtx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
-			if err != nil {
-				panic(err)
+			err2 := logger.LogSync(ctx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
+			if err2 != nil {
+				panic(err2)
 			}
-			return
 		}
 	},
 }
@@ -215,7 +210,7 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 	if err != nil {
 		return fmt.Errorf("failed to get latest stocks: %w", err)
 	}
-	lg.Default(gke.NewFmtMsgData("extracted %d existing stocks from database", len(latest)))
+	lg.Default(gke.NewFmtMsgData("extracted %d existing candles from database", len(latest)))
 
 	tz, err := timezone()
 	if err != nil {
@@ -265,7 +260,7 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 		return fmt.Errorf("error while committing candle processing database transaction: %w", err)
 	}
 
-	lg.Infof("committed database transaction for stocks")
+	lg.Infof("committed database transaction for candles")
 	return nil
 }
 

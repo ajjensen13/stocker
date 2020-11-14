@@ -90,7 +90,7 @@ func stageCompanyProfiles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (si sta
 }
 
 func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (ls latestStocks, err error) {
-	panic(wire.Build(extract.LatestStocks, provideLatestStocks, provideBackoffMedium, provideBackoffNotifier))
+	panic(wire.Build(extract.LatestCandles, provideLatestStocks, provideBackoffMedium, provideBackoffNotifier))
 }
 
 func dataSourceName() (dsn *url.URL, err error) {

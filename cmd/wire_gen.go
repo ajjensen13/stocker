@@ -187,7 +187,7 @@ func stageCompanyProfiles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (stage.
 func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	v, err := extract.LatestStocks(ctx, tx, backOff, notify)
+	v, err := extract.LatestCandles(ctx, tx, backOff, notify)
 	if err != nil {
 		return nil, err
 	}

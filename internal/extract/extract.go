@@ -83,7 +83,7 @@ func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo b
 	return result, err
 }
 
-func LatestStocks(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
+func LatestCandles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
 	var ret map[string]time.Time
 	err := backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
