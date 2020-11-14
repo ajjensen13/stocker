@@ -16,6 +16,7 @@ import (
 	"github.com/ajjensen13/stocker/internal/transform"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"net/url"
 	"time"
 )
@@ -210,8 +211,16 @@ func dataSourceName() (*url.URL, error) {
 	return urlURL, nil
 }
 
-func openTx(ctx context.Context) (pgx.Tx, func(), error) {
-	urlURL, err := dataSourceName()
+func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
+	userinfo, err := provideDbSecrets()
+	if err != nil {
+		return nil, nil, err
+	}
+	cmdAppConfig, err := provideAppConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	urlURL, err := provideDataSourceName(userinfo, cmdAppConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -219,22 +228,18 @@ func openTx(ctx context.Context) (pgx.Tx, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	conn, cleanup2, err := provideDbConn(ctx, pool)
-	if err != nil {
+	return pool, func() {
 		cleanup()
-		return nil, nil, err
-	}
+	}, nil
+}
+
+func openTx(ctx context.Context, conn *pgx.Conn) (pgx.Tx, error) {
 	txOptions := _wireTxOptionsValue
 	tx, err := provideDbTx(ctx, conn, txOptions)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	return tx, func() {
-		cleanup2()
-		cleanup()
-	}, nil
+	return tx, nil
 }
 
 var (

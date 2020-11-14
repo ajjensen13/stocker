@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/sync/errgroup"
 	"time"
 
@@ -44,53 +45,64 @@ var etlCmd = &cobra.Command{
 	Short: "runs a stocker etl",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-		lg, cleanupLogger := logger()
+		pkgLogger, cleanupLogger := logger()
 		defer cleanupLogger()
 
-		pkgCtx, pkgCancel := context.WithCancel(context.Background())
-		defer pkgCancel()
+		pkgCtx, pkgCtxCancel := context.WithCancel(context.Background())
+		defer pkgCtxCancel()
 
-		throttler := time.NewTicker(time.Second)
-		defer throttler.Stop()
-
-		grp, grpCtx := errgroup.WithContext(pkgCtx)
-		grp.Go(func() error {
-			ess, err := processStocks(grpCtx, cmd, lg, throttler)
+		err := func() error {
+			pool, poolCleanup, err := openPool(pkgCtx)
 			if err != nil {
 				return err
 			}
+			defer poolCleanup()
 
+			throttler := time.NewTicker(time.Second)
+			defer throttler.Stop()
+
+			grp, grpCtx := errgroup.WithContext(pkgCtx)
 			grp.Go(func() error {
-				return processCandles(grpCtx, lg, append([]finnhub.Stock{}, ess...), throttler)
+				ess, err := processStocks(grpCtx, cmd, pkgLogger, pool, throttler)
+				if err != nil {
+					return err
+				}
+
+				grp.Go(func() error {
+					return processCandles(grpCtx, pkgLogger, pool, append([]finnhub.Stock{}, ess...), throttler)
+				})
+
+				grp.Go(func() error {
+					return processCompanyProfiles(grpCtx, pkgLogger, pool, append([]finnhub.Stock{}, ess...), throttler)
+				})
+
+				return nil
 			})
 
-			grp.Go(func() error {
-				return processCompanyProfiles(grpCtx, lg, append([]finnhub.Stock{}, ess...), throttler)
-			})
+			return grp.Wait()
+		}()
 
-			return nil
-		})
-
-		err := grp.Wait()
 		if err != nil {
-			lg.Warning("aborting database transaction")
-			err := lg.LogSync(pkgCtx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
+			err := pkgLogger.LogSync(pkgCtx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
 			if err != nil {
 				panic(err)
 			}
 			return
 		}
-
-		lg.Info("committed database transaction")
 	},
 }
 
-func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, throttler *time.Ticker) ([]finnhub.Stock, error) {
-	tx, cleanup, err := openTx(ctx)
+func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, pool *pgxpool.Pool, throttler *time.Ticker) ([]finnhub.Stock, error) {
+	conn, cleanup, err := provideDbConn(ctx, pool)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database database connection for stock processing: %w", err)
+	}
+	defer cleanup()
+
+	tx, err := openTx(ctx, conn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup database transaction for stock processing: %w", err)
 	}
-	defer cleanup()
 
 	<-throttler.C
 	ess, err := extractStocks(ctx, lg)
@@ -130,15 +142,21 @@ func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, throt
 		return nil, fmt.Errorf("error while committing stock processing database transaction: %w", err)
 	}
 
+	lg.Infof("committed database transaction for stocks")
 	return ess, nil
 }
 
-func processCompanyProfiles(ctx context.Context, lg gke.Logger, ess []finnhub.Stock, throttler *time.Ticker) error {
-	tx, cleanup, err := openTx(ctx)
+func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
+	conn, cleanup, err := provideDbConn(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("failed to open database database connection for company profile processing: %w", err)
+	}
+	defer cleanup()
+
+	tx, err := openTx(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("failed to setup database transaction for company profile processing: %w", err)
 	}
-	defer cleanup()
 
 	for _, es := range ess {
 		select {
@@ -177,15 +195,21 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, ess []finnhub.St
 		return fmt.Errorf("error while committing company profile processing database transaction: %w", err)
 	}
 
+	lg.Infof("committed database transaction for company profiles")
 	return nil
 }
 
-func processCandles(ctx context.Context, lg gke.Logger, ess []finnhub.Stock, throttler *time.Ticker) error {
-	tx, cleanup, err := openTx(ctx)
+func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
+	conn, cleanup, err := provideDbConn(ctx, pool)
 	if err != nil {
-		return fmt.Errorf("failed to setup database transaction for candle processing: %w", err)
+		return fmt.Errorf("failed to open database database connection for candles processing: %w", err)
 	}
 	defer cleanup()
+
+	tx, err := openTx(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("failed to setup database transaction for candles processing: %w", err)
+	}
 
 	latest, err := queryMostRecentCandles(ctx, lg, tx)
 	if err != nil {
@@ -241,6 +265,7 @@ func processCandles(ctx context.Context, lg gke.Logger, ess []finnhub.Stock, thr
 		return fmt.Errorf("error while committing candle processing database transaction: %w", err)
 	}
 
+	lg.Infof("committed database transaction for stocks")
 	return nil
 }
 

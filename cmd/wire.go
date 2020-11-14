@@ -26,6 +26,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/google/wire"
 	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"net/url"
 	"time"
 
@@ -42,10 +43,6 @@ func timezone() (tz *time.Location, err error) {
 
 func extractStocks(ctx context.Context, lg gke.Logger) (ss []finnhub.Stock, err error) {
 	panic(wire.Build(provideApiServiceClient, provideAppSecrets, provideAppConfig, provideBackoffMedium, provideBackoffNotifier, provideApiAuthContext, provideStocks))
-}
-
-func transformStocks(es finnhub.Stock, ec finnhub.StockCandles, tz *time.Location) model.Stock {
-	panic(wire.Build(transform.Stock))
 }
 
 func loadStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Stock) (err error) {
@@ -100,8 +97,12 @@ func dataSourceName() (dsn *url.URL, err error) {
 	panic(wire.Build(provideDataSourceName, provideDbSecrets, provideAppConfig))
 }
 
-func openTx(ctx context.Context) (tx pgx.Tx, cleanup func(), err error) {
-	panic(wire.Build(provideDbConnPool, dataSourceName, provideDbConn, provideDbTx, wire.Value(pgx.TxOptions{})))
+func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
+	panic(wire.Build(provideDbConnPool, provideDataSourceName, provideAppConfig, provideDbSecrets))
+}
+
+func openTx(ctx context.Context, conn *pgx.Conn) (tx pgx.Tx, err error) {
+	panic(wire.Build(provideDbTx, wire.Value(pgx.TxOptions{})))
 }
 
 func migrationSourceURL() (uri string, err error) {
