@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -44,47 +45,56 @@ var etlCmd = &cobra.Command{
 	Short: "runs a stocker etl",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-		logger, cleanupLogger := logger()
-		defer cleanupLogger()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		err := func(ctx context.Context) error {
-			pool, poolCleanup, err := openPool(ctx)
-			if err != nil {
-				return err
-			}
-			defer poolCleanup()
-
-			throttler := time.NewTicker(time.Second)
-			defer throttler.Stop()
-
-			ess, err := processStocks(ctx, cmd, logger, pool, throttler)
-			if err != nil {
-				return err
-			}
-
-			err = processCandles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
-			if err != nil {
-				return err
-			}
-
-			err = processCompanyProfiles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
-			if err != nil {
-				return err
-			}
-
-			return nil
-		}(ctx)
-
+		err := runEtl(cmd)
 		if err != nil {
-			err2 := logger.LogSync(ctx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
-			if err2 != nil {
-				panic(err2)
-			}
+			os.Exit(2)
 		}
 	},
+}
+
+func runEtl(cmd *cobra.Command) error {
+	logger, cleanupLogger := logger()
+	defer cleanupLogger()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := func(ctx context.Context) error {
+		pool, poolCleanup, err := openPool(ctx)
+		if err != nil {
+			return err
+		}
+		defer poolCleanup()
+
+		throttler := time.NewTicker(time.Second)
+		defer throttler.Stop()
+
+		ess, err := processStocks(ctx, cmd, logger, pool, throttler)
+		if err != nil {
+			return err
+		}
+
+		err = processCandles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
+		if err != nil {
+			return err
+		}
+
+		err = processCompanyProfiles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}(ctx)
+
+	if err != nil {
+		err2 := logger.LogSync(ctx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
+		if err2 != nil {
+			panic(err2)
+		}
+	}
+
+	return err
 }
 
 func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, pool *pgxpool.Pool, throttler *time.Ticker) ([]finnhub.Stock, error) {
