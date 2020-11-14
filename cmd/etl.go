@@ -98,13 +98,7 @@ func runEtl(cmd *cobra.Command) error {
 }
 
 func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, pool *pgxpool.Pool, throttler *time.Ticker) ([]finnhub.Stock, error) {
-	conn, cleanup, err := provideDbConn(ctx, pool)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database database connection for stock processing: %w", err)
-	}
-	defer cleanup()
-
-	tx, err := openTx(ctx, conn)
+	tx, err := openTx(ctx, pool)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup database transaction for stock processing: %w", err)
 	}
@@ -152,13 +146,7 @@ func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, pool 
 }
 
 func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
-	conn, cleanup, err := provideDbConn(ctx, pool)
-	if err != nil {
-		return fmt.Errorf("failed to open database database connection for company profile processing: %w", err)
-	}
-	defer cleanup()
-
-	tx, err := openTx(ctx, conn)
+	tx, err := openTx(ctx, pool)
 	if err != nil {
 		return fmt.Errorf("failed to setup database transaction for company profile processing: %w", err)
 	}
@@ -205,13 +193,7 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Po
 }
 
 func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
-	conn, cleanup, err := provideDbConn(ctx, pool)
-	if err != nil {
-		return fmt.Errorf("failed to open database database connection for candles processing: %w", err)
-	}
-	defer cleanup()
-
-	tx, err := openTx(ctx, conn)
+	tx, err := openTx(ctx, pool)
 	if err != nil {
 		return fmt.Errorf("failed to setup database transaction for candles processing: %w", err)
 	}

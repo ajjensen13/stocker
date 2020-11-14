@@ -33,27 +33,22 @@ const (
 
 func WrapWithSavePoint(ctx context.Context, tx pgx.Tx, op backoff.Operation, sp string) backoff.Operation {
 	return func() (err error) {
-		_, err = tx.Exec(ctx, `SAVEPOINT `+sp)
+		tx, err = tx.Begin(ctx)
 		if err != nil {
-			err = fmt.Errorf("failed to create savepoint %s: %w", sp, err)
-			return
+			return fmt.Errorf("failed to create pseudo-transaction %s: %w", sp, err)
 		}
 
-		defer func() {
-			if err == nil {
-				_, err = tx.Exec(ctx, `RELEASE SAVEPOINT `+sp)
-				if err != nil {
-					err = fmt.Errorf("failed to release savepoint %s: %w", sp, err)
-				}
-				return
-			}
-			_, err2 := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT `+sp)
-			if err2 != nil {
-				err = fmt.Errorf("failed to rollback to savepoint %s: %v. %w", sp, err2, err)
-			}
-		}()
-
 		err = op()
-		return
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return err
+		}
+
+		err = tx.Commit(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to commit pseudo-transaction %s: %w", sp, err)
+		}
+
+		return nil
 	}
 }

@@ -60,11 +60,6 @@ func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) 
 	return v, nil
 }
 
-func transformStocks(es finnhub.Stock, ec finnhub.StockCandles, tz *time.Location) model.Stock {
-	stock := transform.Stock(es)
-	return stock
-}
-
 func loadStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Stock) error {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
@@ -233,7 +228,7 @@ func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
 	}, nil
 }
 
-func openTx(ctx context.Context, conn *pgx.Conn) (pgx.Tx, error) {
+func openTx(ctx context.Context, conn *pgxpool.Pool) (pgx.Tx, error) {
 	txOptions := _wireTxOptionsValue
 	tx, err := provideDbTx(ctx, conn, txOptions)
 	if err != nil {

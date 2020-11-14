@@ -101,7 +101,7 @@ func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
 	panic(wire.Build(provideDbConnPool, provideDataSourceName, provideAppConfig, provideDbSecrets))
 }
 
-func openTx(ctx context.Context, conn *pgx.Conn) (tx pgx.Tx, err error) {
+func openTx(ctx context.Context, conn *pgxpool.Pool) (tx pgx.Tx, err error) {
 	panic(wire.Build(provideDbTx, wire.Value(pgx.TxOptions{})))
 }
 

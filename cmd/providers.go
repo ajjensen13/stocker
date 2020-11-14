@@ -207,22 +207,7 @@ func provideDbConnPool(ctx context.Context, dsn *url.URL) (ret *pgxpool.Pool, cl
 	return pool, pool.Close, nil
 }
 
-func provideDbConn(ctx context.Context, pool *pgxpool.Pool) (*pgx.Conn, func(), error) {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return nil, func() {}, fmt.Errorf("failed to aquire database connection: %w", err)
-	}
-
-	result := conn.Conn()
-	err = result.Ping(ctx)
-	if err != nil {
-		return nil, func() {}, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	return result, conn.Release, nil
-}
-
-func provideDbTx(ctx context.Context, conn *pgx.Conn, opts pgx.TxOptions) (pgx.Tx, error) {
+func provideDbTx(ctx context.Context, conn *pgxpool.Pool, opts pgx.TxOptions) (pgx.Tx, error) {
 	return conn.BeginTx(ctx, opts)
 }
 
