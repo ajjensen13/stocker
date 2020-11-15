@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"golang.org/x/sync/errgroup"
 	"os"
 	"time"
 
@@ -69,22 +70,25 @@ func runEtl(cmd *cobra.Command) error {
 		throttler := time.NewTicker(time.Second)
 		defer throttler.Stop()
 
-		ess, err := processStocks(ctx, cmd, logger, pool, throttler)
-		if err != nil {
-			return err
-		}
+		grp, grpCtx := errgroup.WithContext(ctx)
+		grp.Go(func() error {
+			ess, err := processStocks(grpCtx, cmd, logger, pool, throttler)
+			if err != nil {
+				return err
+			}
 
-		err = processCandles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
-		if err != nil {
-			return err
-		}
+			grp.Go(func() error {
+				return processCandles(grpCtx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
+			})
 
-		err = processCompanyProfiles(ctx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
-		if err != nil {
-			return err
-		}
+			grp.Go(func() error {
+				return processCompanyProfiles(grpCtx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
+			})
 
-		return nil
+			return nil
+		})
+
+		return grp.Wait()
 	}(ctx)
 
 	if err != nil {
