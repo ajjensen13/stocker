@@ -9,6 +9,6 @@ config:
   exchange: US
   startDate: null
   endDateDate: null
-  dataSourceName: "postgres://pgdb-svc:5432/stocker?sslmode=disable"
+  dataSourceName: "postgres://pgdb-svc:5432/stocker?sslmode=disable&pool_max_conn_lifetime=24h"
   resolution: D
   migration_source_url: "file:///var/migrate"

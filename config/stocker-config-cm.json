@@ -2,7 +2,7 @@
   "exchange": "US",
   "start_date": null,
   "end_date": null,
-  "data_source_name": "postgres://localhost:32346/stocker?sslmode=disable",
+  "data_source_name": "postgres://localhost:32346/stocker?sslmode=disable&pool_max_conn_lifetime=24h",
   "resolution": "D",
   "migration_source_url": "file://migrate"
 }
