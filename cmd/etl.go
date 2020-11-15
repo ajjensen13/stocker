@@ -261,17 +261,22 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 }
 
 type appConfig struct {
-	Exchange           string    `json:"exchange"`
-	Resolution         string    `json:"resolution"`
-	StartDate          time.Time `json:"start_date"`
-	EndDate            time.Time `json:"end_date"`
-	DataSourceName     string    `json:"data_source_name"`
-	Timezone           string    `json:"timezone"`
-	MigrationSourceURL string    `json:"migration_source_url"`
+	Exchange           string           `json:"exchange"`
+	Resolution         string           `json:"resolution"`
+	StartDate          time.Time        `json:"start_date"`
+	EndDate            time.Time        `json:"end_date"`
+	DataSourceName     string           `json:"data_source_name"`
+	DbConnPoolConfig   dbConnPoolConfig `json:"db_conn_pool_config"`
+	Timezone           string           `json:"timezone"`
+	MigrationSourceURL string           `json:"migration_source_url"`
 }
 
 type appSecrets struct {
 	ApiKey string `json:"api_key"`
+}
+
+type dbConnPoolConfig struct {
+	MaxConnLifetime string `json:"max_conn_lifetime"`
 }
 
 func skipAndLimit(cmd *cobra.Command, lg gke.Logger, ess []finnhub.Stock) ([]finnhub.Stock, error) {

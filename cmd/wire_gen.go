@@ -219,7 +219,8 @@ func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := provideDbConnPool(ctx, urlURL)
+	cmdDbConnPoolConfig := cmdAppConfig.DbConnPoolConfig
+	pool, cleanup, err := provideDbConnPool(ctx, urlURL, cmdDbConnPoolConfig)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -198,7 +198,12 @@ func provideDataSourceName(user *url.Userinfo, cfg *appConfig) (dsn *url.URL, er
 	return dsn, nil
 }
 
-func provideDbConnPool(ctx context.Context, dsn *url.URL) (ret *pgxpool.Pool, cleanup func(), err error) {
+func provideDbConnPool(ctx context.Context, dsn *url.URL, poolCfg dbConnPoolConfig) (ret *pgxpool.Pool, cleanup func(), err error) {
+	if poolCfg.MaxConnLifetime != "" {
+		q := dsn.Query()
+		q.Add("pool_max_conn_lifetime", poolCfg.MaxConnLifetime)
+		dsn.RawQuery = q.Encode()
+	}
 	pool, err := pgxpool.Connect(ctx, dsn.String())
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("failed to open database connection pool: %w", err)
