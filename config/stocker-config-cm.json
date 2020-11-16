@@ -1,15 +1,15 @@
 {
   "exchange": "US",
-  "start_date": null,
-  "end_date": null,
-  "data_source_name": "postgres://localhost:32346/stocker?sslmode=disable",
-  "db_conn_pool_config": {
-    "max_conn_lifetime": "1s",
-    "max_conn_idle_time": "1s",
-    "health_check_period": "1s",
-    "min_conns": 1,
-    "max_conns": 8
+  "startDate": null,
+  "endDate": null,
+  "dataSourceName": "postgres://localhost:32346/stocker?sslmode=disable",
+  "dbConnPoolConfig": {
+    "maxConnLifetime": "1s",
+    "maxConnIdleTime": "1s",
+    "healthCheckPeriod": "1s",
+    "minConns": 1,
+    "maxConns": 8
   },
   "resolution": "D",
-  "migration_source_url": "file://migrate"
+  "migrationSourceUrl": "file://migrate"
 }

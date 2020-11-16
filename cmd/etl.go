@@ -291,12 +291,12 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 type appConfig struct {
 	Exchange           string           `json:"exchange"`
 	Resolution         string           `json:"resolution"`
-	StartDate          time.Time        `json:"start_date"`
-	EndDate            time.Time        `json:"end_date"`
-	DataSourceName     string           `json:"data_source_name"`
-	DbConnPoolConfig   dbConnPoolConfig `json:"db_conn_pool_config"`
+	StartDate          time.Time        `json:"startDate"`
+	EndDate            time.Time        `json:"endDate"`
+	DataSourceName     string           `json:"dataSourceName"`
+	DbConnPoolConfig   dbConnPoolConfig `json:"dbConnPoolConfig"`
 	Timezone           string           `json:"timezone"`
-	MigrationSourceURL string           `json:"migration_source_url"`
+	MigrationSourceURL string           `json:"migrationSourceUrl"`
 }
 
 type appSecrets struct {
@@ -304,11 +304,11 @@ type appSecrets struct {
 }
 
 type dbConnPoolConfig struct {
-	MaxConnLifetime   string `json:"max_conn_lifetime"`
-	MaxConnIdleTime   string `json:"max_conn_idle_time"`
-	HealthCheckPeriod string `json:"health_check_period"`
-	MinConns          int    `json:"min_conns"`
-	MaxConns          int    `json:"max_conns"`
+	MaxConnLifetime   string `json:"maxConnLifetime"`
+	MaxConnIdleTime   string `json:"maxConnIdleTime"`
+	HealthCheckPeriod string `json:"healthCheckPeriod"`
+	MinConns          int    `json:"minConns"`
+	MaxConns          int    `json:"maxConns"`
 }
 
 func calcPingTickInterval(pool *pgxpool.Pool) time.Duration {
