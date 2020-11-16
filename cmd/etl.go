@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/sync/errgroup"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -77,11 +78,15 @@ func runEtl(cmd *cobra.Command) error {
 				return err
 			}
 
+			var wg sync.WaitGroup
+			wg.Add(1)
 			grp.Go(func() error {
+				defer wg.Done()
 				return processCandles(grpCtx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
 			})
 
 			grp.Go(func() error {
+				wg.Wait()
 				return processCompanyProfiles(grpCtx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
 			})
 
