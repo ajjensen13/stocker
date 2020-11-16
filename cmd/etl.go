@@ -168,8 +168,9 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Po
 			// Prevent this connection from being cleaned up by being idle.
 			err := tx.Conn().Ping(ctx)
 			if err != nil {
-				lg.Warningf("pinging database failed: %w", err)
+				lg.Warningf("pinging database connection %d failed: %w", tx.Conn().PgConn().PID(), err)
 			}
+			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
 			goto top
 		case <-throttler.C:
 			pingTicker.Reset(pingTickInterval)
@@ -240,8 +241,9 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 			// Prevent this connection from being cleaned up by being idle.
 			err := tx.Conn().Ping(ctx)
 			if err != nil {
-				lg.Warningf("pinging database failed: %w", err)
+				lg.Warningf("pinging database connection %d failed: %w", tx.Conn().PgConn().PID(), err)
 			}
+			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
 			goto top
 		case <-throttler.C:
 			pingTicker.Reset(pingTickInterval)
