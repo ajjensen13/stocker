@@ -166,11 +166,11 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Po
 			return fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())
 		case <-pingTicker.C:
 			// Prevent this connection from being cleaned up by being idle.
+			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
 			err := tx.Conn().Ping(ctx)
 			if err != nil {
-				lg.Warningf("pinging database connection %d failed: %w", tx.Conn().PgConn().PID(), err)
+				lg.Warningf("pinging database connection %d failed: %v", tx.Conn().PgConn().PID(), err.Error())
 			}
-			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
 			goto top
 		case <-throttler.C:
 			pingTicker.Reset(pingTickInterval)
@@ -239,11 +239,11 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 			return fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())
 		case <-pingTicker.C:
 			// Prevent this connection from being cleaned up by being idle.
+			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
 			err := tx.Conn().Ping(ctx)
 			if err != nil {
-				lg.Warningf("pinging database connection %d failed: %w", tx.Conn().PgConn().PID(), err)
+				lg.Warningf("pinging database connection %d failed: %v", tx.Conn().PgConn().PID(), err.Error())
 			}
-			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
 			goto top
 		case <-throttler.C:
 			pingTicker.Reset(pingTickInterval)
