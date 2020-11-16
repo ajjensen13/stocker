@@ -206,7 +206,7 @@ func dataSourceName() (*url.URL, error) {
 	return urlURL, nil
 }
 
-func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
+func openPool(ctx context.Context, lg gke.Logger) (*pgxpool.Pool, func(), error) {
 	userinfo, err := provideDbSecrets()
 	if err != nil {
 		return nil, nil, err
@@ -224,7 +224,7 @@ func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := provideDbConnPool(ctx, cmdDbPoolDsn)
+	pool, cleanup, err := provideDbConnPool(ctx, lg, cmdDbPoolDsn)
 	if err != nil {
 		return nil, nil, err
 	}

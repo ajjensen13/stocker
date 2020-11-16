@@ -97,7 +97,7 @@ func dataSourceName() (dsn *url.URL, err error) {
 	panic(wire.Build(provideDataSourceName, provideDbSecrets, provideAppConfig))
 }
 
-func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
+func openPool(ctx context.Context, lg gke.Logger) (*pgxpool.Pool, func(), error) {
 	panic(wire.Build(provideDbConnPool, provideDataSourceName, provideAppConfig, provideDbSecrets, wire.FieldsOf(new(*appConfig), "DbConnPoolConfig"), provideDbPoolDsn))
 }
 

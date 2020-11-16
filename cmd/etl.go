@@ -61,7 +61,7 @@ func runEtl(cmd *cobra.Command) error {
 	defer cancel()
 
 	err := func(ctx context.Context) error {
-		pool, poolCleanup, err := openPool(ctx)
+		pool, poolCleanup, err := openPool(ctx, logger)
 		if err != nil {
 			return err
 		}

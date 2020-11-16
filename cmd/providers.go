@@ -198,10 +198,12 @@ func provideDataSourceName(user *url.Userinfo, cfg *appConfig) (dsn *url.URL, er
 	return dsn, nil
 }
 
-type dbPoolDsn string
+type dbPoolDsn *url.URL
 
-func provideDbConnPool(ctx context.Context, dsn dbPoolDsn) (ret *pgxpool.Pool, cleanup func(), err error) {
-	pool, err := pgxpool.Connect(ctx, string(dsn))
+func provideDbConnPool(ctx context.Context, lg gke.Logger, dsn dbPoolDsn) (ret *pgxpool.Pool, cleanup func(), err error) {
+	u := (*url.URL)(dsn)
+	lg.Debugf("creating database connection pool: %v", u.Redacted())
+	pool, err := pgxpool.Connect(ctx, u.String())
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("failed to open database connection pool: %w", err)
 	}
@@ -212,7 +214,7 @@ func provideDbConnPool(ctx context.Context, dsn dbPoolDsn) (ret *pgxpool.Pool, c
 func provideDbPoolDsn(dsn *url.URL, poolCfg dbConnPoolConfig) (dbPoolDsn, error) {
 	poolDsn, err := url.Parse(dsn.String())
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	q := poolDsn.Query()
@@ -237,7 +239,7 @@ func provideDbPoolDsn(dsn *url.URL, poolCfg dbConnPoolConfig) (dbPoolDsn, error)
 	}
 
 	poolDsn.RawQuery = q.Encode()
-	return dbPoolDsn(poolDsn.String()), nil
+	return poolDsn, nil
 }
 
 func provideDbTx(ctx context.Context, conn *pgxpool.Pool, opts pgx.TxOptions) (pgx.Tx, error) {
@@ -262,6 +264,7 @@ func provideLogger() (lg gke.Logger, cleanup func()) {
 }
 
 func provideMigrator(lg gke.Logger, databaseURL *url.URL, sourceURL string) (m *migrate.Migrate, err error) {
+	lg.Debugf("creating database migrator: %v -> %v", sourceURL, databaseURL.Redacted())
 	m, err = migrate.New(sourceURL, databaseURL.String())
 	if err != nil {
 		return nil, err
