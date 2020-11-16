@@ -43,6 +43,7 @@ func latestModification(ctx context.Context, tx pgx.Tx, table string, bo backoff
 		if err != nil {
 			return fmt.Errorf("failed to query latest %s modification: %w", table, err)
 		}
+		defer rows.Close()
 
 		if !rows.Next() {
 			return nil

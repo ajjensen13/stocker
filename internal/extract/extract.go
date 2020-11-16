@@ -93,6 +93,7 @@ func LatestCandles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backo
 		if err != nil {
 			return fmt.Errorf("failed to query latest stocks: %w", err)
 		}
+		defer rows.Close()
 
 		ret = make(map[string]time.Time)
 		for rows.Next() {
