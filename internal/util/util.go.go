@@ -40,7 +40,10 @@ func WrapWithSavePoint(ctx context.Context, tx pgx.Tx, op backoff.Operation, sp 
 
 		err = op()
 		if err != nil {
-			_ = tx.Rollback(ctx)
+			rbErr := tx.Rollback(ctx)
+			if rbErr != nil {
+				panic(rbErr)
+			}
 			return err
 		}
 
