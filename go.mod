@@ -8,7 +8,7 @@ require (
 	cloud.google.com/go/storage v1.12.0 // indirect
 	github.com/Finnhub-Stock-API/finnhub-go v1.2.1
 	github.com/ajjensen13/config v0.0.16
-	github.com/ajjensen13/gke v0.0.49
+	github.com/ajjensen13/gke v0.0.52
 	github.com/antihax/optional v1.0.0
 	github.com/cenkalti/backoff/v4 v4.1.0
 	github.com/golang-migrate/migrate/v4 v4.13.0
@@ -22,7 +22,7 @@ require (
 	golang.org/x/oauth2 v0.0.0-20201109201403-9fd604954f58 // indirect
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/sys v0.0.0-20201113233024-12cec1faf1ba // indirect
-	golang.org/x/tools v0.0.0-20201114224030-61ea331ec02b // indirect
+	golang.org/x/tools v0.0.0-20201116002733-ac45abd4c88c // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20201113130914-ce600e9a6f9e // indirect
 )

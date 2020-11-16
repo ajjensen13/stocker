@@ -98,7 +98,7 @@ func dataSourceName() (dsn *url.URL, err error) {
 }
 
 func openPool(ctx context.Context) (*pgxpool.Pool, func(), error) {
-	panic(wire.Build(provideDbConnPool, provideDataSourceName, provideAppConfig, provideDbSecrets, wire.FieldsOf(new(*appConfig), "DbConnPoolConfig")))
+	panic(wire.Build(provideDbConnPool, provideDataSourceName, provideAppConfig, provideDbSecrets, wire.FieldsOf(new(*appConfig), "DbConnPoolConfig"), provideDbPoolDsn))
 }
 
 func openTx(ctx context.Context, conn *pgxpool.Pool) (tx pgx.Tx, err error) {

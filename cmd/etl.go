@@ -155,11 +155,24 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Po
 		return fmt.Errorf("failed to setup database transaction for company profile processing: %w", err)
 	}
 
+	pingTickInterval := calcPingTickInterval(pool)
+	pingTicker := time.NewTicker(pingTickInterval)
+	defer pingTicker.Stop()
+
 	for _, es := range ess {
+	top:
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())
+		case <-pingTicker.C:
+			// Prevent this connection from being cleaned up by being idle.
+			err := tx.Conn().Ping(ctx)
+			if err != nil {
+				lg.Warningf("pinging database failed: %w", err)
+			}
+			goto top
 		case <-throttler.C:
+			pingTicker.Reset(pingTickInterval)
 			ecp, err := extractCompanyProfile(ctx, lg, es)
 			if err != nil {
 				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err))
@@ -214,11 +227,24 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 	}
 	lg.Default(gke.NewFmtMsgData("using %v timezone to store data", tz))
 
+	pingTickInterval := calcPingTickInterval(pool)
+	pingTicker := time.NewTicker(pingTickInterval)
+	defer pingTicker.Stop()
+
 	for _, es := range ess {
+	top:
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())
+		case <-pingTicker.C:
+			// Prevent this connection from being cleaned up by being idle.
+			err := tx.Conn().Ping(ctx)
+			if err != nil {
+				lg.Warningf("pinging database failed: %w", err)
+			}
+			goto top
 		case <-throttler.C:
+			pingTicker.Reset(pingTickInterval)
 			ec, err := extractCandles(ctx, lg, es, latest)
 			if err != nil {
 				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err))
@@ -276,7 +302,30 @@ type appSecrets struct {
 }
 
 type dbConnPoolConfig struct {
-	MaxConnLifetime string `json:"max_conn_lifetime"`
+	MaxConnLifetime   string `json:"max_conn_lifetime"`
+	MaxConnIdleTime   string `json:"max_conn_idle_time"`
+	HealthCheckPeriod string `json:"health_check_period"`
+	MinConns          int    `json:"min_conns"`
+	MaxConns          int    `json:"max_conns"`
+}
+
+func calcPingTickInterval(pool *pgxpool.Pool) time.Duration {
+	poolCfg := pool.Config()
+
+	pingTickInterval := time.Minute
+	if healthCheckPeriod := poolCfg.HealthCheckPeriod; healthCheckPeriod < pingTickInterval {
+		pingTickInterval = healthCheckPeriod
+	}
+
+	if maxConnIdleTime := poolCfg.MaxConnIdleTime; maxConnIdleTime < pingTickInterval {
+		pingTickInterval = maxConnIdleTime
+	}
+
+	if maxConnLifetime := poolCfg.MaxConnLifetime; maxConnLifetime < pingTickInterval {
+		pingTickInterval = maxConnLifetime
+	}
+
+	return pingTickInterval
 }
 
 func skipAndLimit(cmd *cobra.Command, lg gke.Logger, ess []finnhub.Stock) ([]finnhub.Stock, error) {

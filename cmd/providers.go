@@ -198,18 +198,46 @@ func provideDataSourceName(user *url.Userinfo, cfg *appConfig) (dsn *url.URL, er
 	return dsn, nil
 }
 
-func provideDbConnPool(ctx context.Context, dsn *url.URL, poolCfg dbConnPoolConfig) (ret *pgxpool.Pool, cleanup func(), err error) {
-	if poolCfg.MaxConnLifetime != "" {
-		q := dsn.Query()
-		q.Add("pool_max_conn_lifetime", poolCfg.MaxConnLifetime)
-		dsn.RawQuery = q.Encode()
-	}
-	pool, err := pgxpool.Connect(ctx, dsn.String())
+type dbPoolDsn string
+
+func provideDbConnPool(ctx context.Context, dsn dbPoolDsn) (ret *pgxpool.Pool, cleanup func(), err error) {
+	pool, err := pgxpool.Connect(ctx, string(dsn))
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("failed to open database connection pool: %w", err)
 	}
 
 	return pool, pool.Close, nil
+}
+
+func provideDbPoolDsn(dsn *url.URL, poolCfg dbConnPoolConfig) (dbPoolDsn, error) {
+	poolDsn, err := url.Parse(dsn.String())
+	if err != nil {
+		return "", err
+	}
+
+	q := poolDsn.Query()
+	if poolCfg.MaxConnLifetime != "" {
+		q.Add("pool_max_conn_lifetime", poolCfg.MaxConnLifetime)
+	}
+
+	if poolCfg.MaxConnIdleTime != "" {
+		q.Add("pool_max_conn_idle_time", poolCfg.MaxConnIdleTime)
+	}
+
+	if poolCfg.HealthCheckPeriod != "" {
+		q.Add("pool_health_check_period", poolCfg.HealthCheckPeriod)
+	}
+
+	if poolCfg.MinConns > 0 {
+		q.Add("pool_min_conns", fmt.Sprintf("%d", poolCfg.MinConns))
+	}
+
+	if poolCfg.MaxConns > 0 {
+		q.Add("pool_max_conns", fmt.Sprintf("%d", poolCfg.MaxConns))
+	}
+
+	poolDsn.RawQuery = q.Encode()
+	return dbPoolDsn(poolDsn.String()), nil
 }
 
 func provideDbTx(ctx context.Context, conn *pgxpool.Pool, opts pgx.TxOptions) (pgx.Tx, error) {
@@ -228,6 +256,7 @@ func provideLogger() (lg gke.Logger, cleanup func()) {
 
 	gke.LogEnv(lg)
 	gke.LogMetadata(lg)
+	gke.LogGoRuntime(lg)
 
 	return lg, cleanup
 }

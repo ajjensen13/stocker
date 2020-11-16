@@ -4,23 +4,4 @@ metadata:
   name: stocker-config-cm
 data:
   stocker-config-cm.json: |
-    {
-      "exchange": "{{ .Values.config.exchange }}",
-      {{- with .Values.config.startDate }}
-        "start_date": "{{ . }}",
-      {{- end }}
-      {{- with .Values.config.endDate }}
-        "end_date": "{{ . }}",
-      {{- end }}
-      {{- with .Values.config.timezone }}
-      "timezone": "{{ . }}",
-      {{- end }}
-      "data_source_name": "{{ .Values.config.dataSourceName }}",
-      {{- with .Values.config.db_conn_pool_config }}
-      "db_conn_pool_config": {
-        "max_conn_lifetime": "{{ .max_conn_lifetime }}"
-      },
-      {{- end }}
-      "resolution": "{{ .Values.config.resolution }}",
-      "migration_source_url": "{{ .Values.config.migration_source_url }}"
-    }
+    {{- .Values.config | toPrettyJson | nindent 4 -}}
