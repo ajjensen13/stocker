@@ -15,7 +15,6 @@ import (
 	"github.com/ajjensen13/stocker/internal/stage"
 	"github.com/ajjensen13/stocker/internal/transform"
 	"github.com/golang-migrate/migrate/v4"
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"net/url"
 	"time"
@@ -60,27 +59,27 @@ func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) 
 	return v, nil
 }
 
-func loadStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Stock) error {
+func loadStocks(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ss []finnhub.Stock) error {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	error2 := load.Stocks(ctx, tx, ss, backOff, notify)
+	error2 := load.Stocks(ctx, lg, pool, jobRunId, ss, backOff, notify)
 	return error2
 }
 
-func stageStocks(ctx context.Context, lg gke.Logger, tx pgx.Tx) (stage.StagingInfo, error) {
+func stageStocks(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (stage.StagingInfo, error) {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Stocks(ctx, tx, backOff, notify)
+	stagingInfo, err := stage.Stocks(ctx, lg, pool, jobRunId, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (finnhub.StockCandles, error) {
+func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (extract.StockCandlesWithMetadata, error) {
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
-		return finnhub.StockCandles{}, err
+		return extract.StockCandlesWithMetadata{}, err
 	}
 	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
@@ -88,50 +87,58 @@ func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 	notify := provideBackoffNotifier(lg)
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
-		return finnhub.StockCandles{}, err
+		return extract.StockCandlesWithMetadata{}, err
 	}
 	cmdLatestStock := provideLatestStock(stock, latest)
 	location, err := provideTimezone(cmdAppConfig)
 	if err != nil {
-		return finnhub.StockCandles{}, err
+		return extract.StockCandlesWithMetadata{}, err
 	}
 	cmdCandleConfig := provideCandleConfig(cmdAppConfig, cmdLatestStock, location)
-	stockCandles, err := provideCandles(cmdApiAuthContext, lg, defaultApiService, backOff, notify, stock, cmdCandleConfig)
+	stockCandlesWithMetadata, err := provideCandles(cmdApiAuthContext, lg, defaultApiService, backOff, notify, stock, cmdCandleConfig)
 	if err != nil {
-		return finnhub.StockCandles{}, err
+		return extract.StockCandlesWithMetadata{}, err
 	}
-	return stockCandles, nil
+	return stockCandlesWithMetadata, nil
 }
 
-func transformCandles(es finnhub.Stock, ec finnhub.StockCandles, tz *time.Location) ([]model.Candle, error) {
-	v, err := transform.Candles(es, ec, tz)
+func transformCandles(es finnhub.Stock, symbol string, ec finnhub.StockCandles) ([]model.Candle, error) {
+	location, err := timezone()
+	if err != nil {
+		return nil, err
+	}
+	v, err := transform.Candles(symbol, ec, location)
 	if err != nil {
 		return nil, err
 	}
 	return v, nil
 }
 
-func loadCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, ss []model.Candle) error {
+func loadCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ss extract.StockCandlesWithMetadata) error {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	error2 := load.Candles(ctx, tx, ss, backOff, notify)
+	error2 := load.Candles(ctx, jobRunId, pool, ss, backOff, notify)
 	return error2
 }
 
-func stageCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, symbol string) (stage.StagingInfo, error) {
+func stageCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string) (stage.StagingInfo, error) {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Candles(ctx, tx, backOff, notify, symbol)
+	location, err := timezone()
+	if err != nil {
+		return stage.StagingInfo{}, err
+	}
+	stagingInfo, err := stage.Candles(ctx, jobRunId, pool, backOff, notify, location)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func stage52WkCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx, symbol string, latestModification time.Time) (stage.StagingInfo, error) {
+func stage52WkCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string) (stage.StagingInfo, error) {
 	backOff := provideBackoffLong()
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Candles52Wk(ctx, lg, tx, latestModification, symbol, backOff, notify)
+	stagingInfo, err := stage.Candles52Wk(ctx, lg, jobRunId, pool, symbol, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
@@ -162,27 +169,27 @@ func transformCompanyProfile(ecp finnhub.CompanyProfile2) (model.CompanyProfile,
 	return companyProfile, nil
 }
 
-func loadCompanyProfile(ctx context.Context, lg gke.Logger, tx pgx.Tx, cp model.CompanyProfile) error {
+func loadCompanyProfile(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, cp finnhub.CompanyProfile2) error {
 	backOff := provideBackoffShort()
 	notify := provideBackoffNotifier(lg)
-	error2 := load.CompanyProfile(ctx, tx, cp, backOff, notify)
+	error2 := load.CompanyProfile(ctx, jobRunId, pool, cp, backOff, notify)
 	return error2
 }
 
-func stageCompanyProfiles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (stage.StagingInfo, error) {
+func stageCompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (stage.StagingInfo, error) {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.CompanyProfiles(ctx, tx, backOff, notify)
+	stagingInfo, err := stage.CompanyProfiles(ctx, jobRunId, pool, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func queryMostRecentCandles(ctx context.Context, lg gke.Logger, tx pgx.Tx) (latestStocks, error) {
+func queryMostRecentCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (latestStocks, error) {
 	backOff := provideBackoffMedium()
 	notify := provideBackoffNotifier(lg)
-	v, err := extract.LatestCandles(ctx, tx, backOff, notify)
+	v, err := extract.LatestCandles(ctx, pool, backOff, notify)
 	if err != nil {
 		return nil, err
 	}
@@ -232,19 +239,6 @@ func openPool(ctx context.Context, lg gke.Logger) (*pgxpool.Pool, func(), error)
 		cleanup()
 	}, nil
 }
-
-func openTx(ctx context.Context, conn *pgxpool.Pool) (pgx.Tx, error) {
-	txOptions := _wireTxOptionsValue
-	tx, err := provideDbTx(ctx, conn, txOptions)
-	if err != nil {
-		return nil, err
-	}
-	return tx, nil
-}
-
-var (
-	_wireTxOptionsValue = pgx.TxOptions{}
-)
 
 func migrationSourceURL() (string, error) {
 	cmdAppConfig, err := provideAppConfig()

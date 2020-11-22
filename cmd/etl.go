@@ -24,15 +24,11 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/sync/errgroup"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ajjensen13/gke"
-
-	"github.com/ajjensen13/stocker/internal/model"
-	"github.com/ajjensen13/stocker/internal/transform"
 )
 
 const (
@@ -47,71 +43,89 @@ var etlCmd = &cobra.Command{
 	Short: "runs a stocker etl",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-		err := runEtl(cmd)
+		logger, cleanupLogger := logger()
+		defer cleanupLogger()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		err := runEtl(ctx, cmd, logger)
 		if err != nil {
+			_ = logger.LogSync(ctx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
 			os.Exit(2)
 		}
 	},
 }
 
-func runEtl(cmd *cobra.Command) error {
-	logger, cleanupLogger := logger()
-	defer cleanupLogger()
+func runEtl(ctx context.Context, cmd *cobra.Command, logger gke.Logger) error {
+	pool, poolCleanup, err := openPool(ctx, logger)
+	if err != nil {
+		return err
+	}
+	defer poolCleanup()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	jobRunId, err := startJob(ctx, pool)
+	if err != nil {
+		return err
+	}
 
-	err := func(ctx context.Context) error {
-		pool, poolCleanup, err := openPool(ctx, logger)
+	throttler := time.NewTicker(time.Second)
+	defer throttler.Stop()
+
+	grp, grpCtx := errgroup.WithContext(ctx)
+	grp.Go(func() error {
+
+		ess, err := processStocks(grpCtx, cmd, logger, jobRunId, pool, throttler)
 		if err != nil {
 			return err
 		}
-		defer poolCleanup()
 
-		throttler := time.NewTicker(time.Second)
-		defer throttler.Stop()
-
-		grp, grpCtx := errgroup.WithContext(ctx)
 		grp.Go(func() error {
-			ess, err := processStocks(grpCtx, cmd, logger, pool, throttler)
-			if err != nil {
-				return err
-			}
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			grp.Go(func() error {
-				defer wg.Done()
-				return processCandles(grpCtx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
-			})
-
-			grp.Go(func() error {
-				wg.Wait()
-				return processCompanyProfiles(grpCtx, logger, pool, append([]finnhub.Stock{}, ess...), throttler)
-			})
-
-			return nil
+			return processCandles(grpCtx, logger, jobRunId, pool, append([]finnhub.Stock{}, ess...), throttler)
 		})
 
-		return grp.Wait()
-	}(ctx)
+		grp.Go(func() error {
+			return processCompanyProfiles(grpCtx, logger, jobRunId, pool, append([]finnhub.Stock{}, ess...), throttler)
+		})
 
-	if err != nil {
-		err2 := logger.LogSync(ctx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
-		if err2 != nil {
-			panic(err2)
-		}
+		return nil
+	})
+
+	errWait := grp.Wait()
+	errEnd := endJob(ctx, pool, jobRunId, errWait == nil)
+	if errEnd != nil {
+		_ = logger.ErrorErr(errEnd)
 	}
-
-	return err
+	return errWait
 }
 
-func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, pool *pgxpool.Pool, throttler *time.Ticker) ([]finnhub.Stock, error) {
-	tx, err := openTx(ctx, pool)
+func startJob(ctx context.Context, pool *pgxpool.Pool) (jobRunId uint64, err error) {
+	var did uint64
+	row := pool.QueryRow(ctx, `SELECT id FROM metadata.job_definition WHERE name = 'Finnhub ETL'`)
+	err = row.Scan(&did)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup database transaction for stock processing: %w", err)
+		return 0, fmt.Errorf("failed to determine job definition id: %w", err)
 	}
 
+	row = pool.QueryRow(ctx, `INSERT INTO metadata.job_run (job_definition_id) VALUES ($1) RETURNING id`, did)
+	err = row.Scan(&jobRunId)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create new job run: %w", err)
+	}
+
+	return jobRunId, nil
+}
+
+func endJob(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, success bool) error {
+	_, err := pool.Exec(ctx, `UPDATE metadata.job_run SET success = $1 WHERE id = $2`, success, jobRunId)
+	if err != nil {
+		return fmt.Errorf("failed to update job_run.success: %w", err)
+	}
+
+	return nil
+}
+
+func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, throttler *time.Ticker) ([]finnhub.Stock, error) {
 	<-throttler.C
 	ess, err := extractStocks(ctx, lg)
 	if err != nil {
@@ -124,61 +138,28 @@ func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, pool 
 		return nil, fmt.Errorf("failed to reduce result set using skip and limit: %w", err)
 	}
 
-	tss := make([]model.Stock, 0, len(ess))
-	for _, es := range ess {
-		if es.Symbol == "" {
-			lg.Warningf("skipping stock without symbol: %v", es)
-			continue
-		}
-		tss = append(tss, transform.Stock(es))
-	}
-
-	err = loadStocks(ctx, lg, tx, tss)
+	err = loadStocks(ctx, lg, jobRunId, pool, ess)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load stocks into database: %w", err)
 	}
-	lg.Info(gke.NewFmtMsgData("successfully loaded %d stocks", len(tss)))
+	lg.Info(gke.NewFmtMsgData("successfully loaded %d stocks", len(ess)))
 
-	si, err := stageStocks(ctx, lg, tx)
+	si, err := stageStocks(ctx, lg, jobRunId, pool)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stage stocks: %w", err)
 	}
-	lg.Infof("successfully staged %d stocks (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
-
-	err = tx.Commit(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error while committing stock processing database transaction: %w", err)
-	}
+	lg.Infof("successfully staged %d stocks (%d rows modified)", si.RowsStaged, si.RowsModified)
 
 	lg.Infof("committed database transaction for stocks")
 	return ess, nil
 }
 
-func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
-	tx, err := openTx(ctx, pool)
-	if err != nil {
-		return fmt.Errorf("failed to setup database transaction for company profile processing: %w", err)
-	}
-
-	pingTickInterval := calcPingTickInterval(pool)
-	pingTicker := time.NewTicker(pingTickInterval)
-	defer pingTicker.Stop()
-
+func processCompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
 	for _, es := range ess {
-	top:
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())
-		case <-pingTicker.C:
-			// Prevent this connection from being cleaned up by being idle.
-			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
-			err := tx.Conn().Ping(ctx)
-			if err != nil {
-				lg.Warningf("pinging database connection %d failed: %v", tx.Conn().PgConn().PID(), err.Error())
-			}
-			goto top
 		case <-throttler.C:
-			pingTicker.Reset(pingTickInterval)
 			ecp, err := extractCompanyProfile(ctx, lg, es)
 			if err != nil {
 				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err))
@@ -186,12 +167,12 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Po
 				continue
 			}
 
-			tcp, err := transformCompanyProfile(ecp)
-			if err != nil {
-				return fmt.Errorf("failed to transform company profile %q: %w", es.Symbol, err)
+			if ecp.Ticker == "" {
+				_ = lg.Warningf("company profile %q will be skipped due to missing ticker", es.Symbol)
+				continue
 			}
 
-			err = loadCompanyProfile(ctx, lg, tx, tcp)
+			err = loadCompanyProfile(ctx, lg, jobRunId, pool, ecp)
 			if err != nil {
 				return fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)
 			}
@@ -200,58 +181,28 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, pool *pgxpool.Po
 		}
 	}
 
-	si, err := stageCompanyProfiles(ctx, lg, tx)
+	si, err := stageCompanyProfiles(ctx, lg, jobRunId, pool)
 	if err != nil {
 		return fmt.Errorf("failed to stage company profiles: %w", err)
 	}
-	lg.Defaultf("successfully staged %d company profiles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
-
-	err = tx.Commit(ctx)
-	if err != nil {
-		return fmt.Errorf("error while committing company profile processing database transaction: %w", err)
-	}
+	lg.Defaultf("successfully staged %d company profiles (%d rows modified)", si.RowsStaged, si.RowsModified)
 
 	lg.Infof("committed database transaction for company profiles")
 	return nil
 }
 
-func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
-	tx, err := openTx(ctx, pool)
-	if err != nil {
-		return fmt.Errorf("failed to setup database transaction for candles processing: %w", err)
-	}
-
-	latest, err := queryMostRecentCandles(ctx, lg, tx)
+func processCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
+	latest, err := queryMostRecentCandles(ctx, lg, jobRunId, pool)
 	if err != nil {
 		return fmt.Errorf("failed to get latest stocks: %w", err)
 	}
 	lg.Default(gke.NewFmtMsgData("extracted %d existing candles from database", len(latest)))
 
-	tz, err := timezone()
-	if err != nil {
-		return fmt.Errorf("failed to get timezone: %w", err)
-	}
-	lg.Default(gke.NewFmtMsgData("using %v timezone to store data", tz))
-
-	pingTickInterval := calcPingTickInterval(pool)
-	pingTicker := time.NewTicker(pingTickInterval)
-	defer pingTicker.Stop()
-
 	for _, es := range ess {
-	top:
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())
-		case <-pingTicker.C:
-			// Prevent this connection from being cleaned up by being idle.
-			lg.Debugf("pinged database connection: %d", tx.Conn().PgConn().PID())
-			err := tx.Conn().Ping(ctx)
-			if err != nil {
-				lg.Warningf("pinging database connection %d failed: %v", tx.Conn().PgConn().PID(), err.Error())
-			}
-			goto top
 		case <-throttler.C:
-			pingTicker.Reset(pingTickInterval)
 			ec, err := extractCandles(ctx, lg, es, latest)
 			if err != nil {
 				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err))
@@ -259,37 +210,25 @@ func processCandles(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, ess 
 				continue
 			}
 
-			tcs, err := transformCandles(es, ec, tz)
-			if err != nil {
-				return fmt.Errorf("failed to transform stock candles %q: %w", es.Symbol, err)
-			}
-
-			err = loadCandles(ctx, lg, tx, tcs)
+			err = loadCandles(ctx, lg, jobRunId, pool, ec)
 			if err != nil {
 				return fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)
 			}
+			lg.Defaultf("requested & loaded %d stock candles from finnhub into database: %s", len(ec.StockCandles.T), es.Symbol)
 
-			si, err := stageCandles(ctx, lg, tx, es.Symbol)
+			si, err := stageCandles(ctx, lg, jobRunId, pool, es.Symbol)
 			if err != nil {
 				return fmt.Errorf("failed to stage candles for symbol %s: %w", es.Symbol, err)
 			}
-			lg.Defaultf("successfully staged %d candles for symbol %s (previous latest modification: %v)", si.RowsAffected, es.Symbol, si.PreviousLatestModification)
+			lg.Defaultf("successfully staged %d candles for symbol %s", si.RowsStaged, es.Symbol)
 
-			lg.Defaultf("requested & loaded %d stock candles from finnhub into database: %s", len(tcs), es.Symbol)
-			si, err = stage52WkCandles(ctx, lg, tx, es.Symbol, si.PreviousLatestModification)
+			si, err = stage52WkCandles(ctx, lg, jobRunId, pool, es.Symbol)
 			if err != nil {
 				return fmt.Errorf("failed to stage candles: %w", err)
 			}
-			lg.Defaultf("successfully staged %d 52wk candles (previous latest modification: %v)", si.RowsAffected, si.PreviousLatestModification)
+			lg.Defaultf("successfully staged %d 52wk candles (%d rows modified)", si.RowsStaged, si.RowsModified)
 		}
 	}
-
-	err = tx.Commit(ctx)
-	if err != nil {
-		return fmt.Errorf("error while committing candle processing database transaction: %w", err)
-	}
-
-	lg.Infof("committed database transaction for candles")
 	return nil
 }
 
@@ -314,25 +253,6 @@ type dbConnPoolConfig struct {
 	HealthCheckPeriod string `json:"healthCheckPeriod"`
 	MinConns          int    `json:"minConns"`
 	MaxConns          int    `json:"maxConns"`
-}
-
-func calcPingTickInterval(pool *pgxpool.Pool) time.Duration {
-	poolCfg := pool.Config()
-
-	pingTickInterval := time.Minute
-	if healthCheckPeriod := poolCfg.HealthCheckPeriod; healthCheckPeriod < pingTickInterval {
-		pingTickInterval = healthCheckPeriod
-	}
-
-	if maxConnIdleTime := poolCfg.MaxConnIdleTime; maxConnIdleTime < pingTickInterval {
-		pingTickInterval = maxConnIdleTime
-	}
-
-	if maxConnLifetime := poolCfg.MaxConnLifetime; maxConnLifetime < pingTickInterval {
-		pingTickInterval = maxConnLifetime
-	}
-
-	return pingTickInterval
 }
 
 func skipAndLimit(cmd *cobra.Command, lg gke.Logger, ess []finnhub.Stock) ([]finnhub.Stock, error) {

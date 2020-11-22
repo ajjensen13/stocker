@@ -1,0 +1,16 @@
+create role stocker_src_ro;
+grant stocker_src_ro to stocker;
+create role stocker_src_rw;
+grant stocker_src_rw to stocker;
+create role stocker_report_ro;
+grant stocker_report_ro to stocker;
+create role stocker_report_rw;
+grant stocker_report_rw to stocker;
+create role stocker_stage_ro;
+grant stocker_stage_ro to stocker;
+create role stocker_stage_rw;
+grant stocker_stage_rw to stocker;
+create role stocker_metadata_ro;
+grant stocker_metadata_ro to stocker;
+create role stocker_metadata_rw;
+grant stocker_metadata_rw to stocker;

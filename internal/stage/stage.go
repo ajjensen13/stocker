@@ -20,254 +20,402 @@ package stage
 import (
 	"context"
 	"fmt"
+	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/gke"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"time"
 
+	"github.com/ajjensen13/stocker/internal/extract"
+	"github.com/ajjensen13/stocker/internal/transform"
 	"github.com/ajjensen13/stocker/internal/util"
 )
 
-func latestModification(ctx context.Context, tx pgx.Tx, table string, bo backoff.BackOff, bon backoff.Notify, where string, params ...interface{}) (time.Time, error) {
-	var ret time.Time
-	err := backoff.RetryNotify(func() error {
-		ctx, cancel := context.WithTimeout(ctx, util.ShortReqTimeout)
+func Stocks(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, jobRunId uint64, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+	err = backoff.RetryNotify(func() error {
+		var rowsStaged, rowsModified int64
+
+		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
 		defer cancel()
 
-		qry := fmt.Sprintf(`SELECT MAX("Modified") FROM %s`, table)
-		if where != "" {
-			qry = fmt.Sprintf("%s WHERE %s", qry, where)
-		}
-
-		rows, err := tx.Query(ctx, qry, params...)
+		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to query latest %s modification: %w", table, err)
-		}
-		defer rows.Close()
-
-		if !rows.Next() {
-			return nil
+			return fmt.Errorf("failed to create transaction for staging stocks: %w", err)
 		}
 
-		var timestamp *time.Time
-		err = rows.Scan(&timestamp)
+		ess, err := querySrcStocks(ctx, jobRunId, tx)
 		if err != nil {
-			return fmt.Errorf("failed to parse latest %s modification: %w", table, err)
+			return err
 		}
 
-		if rows.Next() {
-			return fmt.Errorf("query for latest %s modification returned multiple rows", table)
+		stocks := transform.Stocks(ess)
+
+		for _, stock := range stocks {
+			sql := `
+				INSERT INTO stage.stocks
+					(job_run_id, symbol, display_symbol, description, created, modified) 
+				VALUES 
+					($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+				ON CONFLICT 
+					(symbol) 
+				DO UPDATE 
+					SET 
+						job_run_id = excluded.job_run_id,
+						display_symbol = excluded.display_symbol,
+						description = excluded.description,
+						modified = excluded.modified
+					WHERE
+						stocks.display_symbol IS DISTINCT FROM excluded.display_symbol OR
+						stocks.description IS DISTINCT FROM excluded.description`
+
+			r, err := tx.Exec(ctx, sql, jobRunId, stock.Symbol, stock.DisplaySymbol, stock.Description)
+			if err != nil {
+				return fmt.Errorf("error while staging stocks: %w", err)
+			}
+
+			rowsModified += r.RowsAffected()
+			rowsStaged++
 		}
 
-		if timestamp != nil {
-			ret = *timestamp
+		err = tx.Commit(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to commit transaction for staging stocks: %w", err)
 		}
 
+		ret = StagingInfo{RowsModified: rowsModified, RowsStaged: rowsStaged}
 		return nil
 	}, bo, bon)
 
+	return
+}
+
+func querySrcStocks(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finnhub.Stock, err error) {
+	rows, err := tx.Query(ctx, `SELECT data FROM src.stocks WHERE job_run_id = $1`, jobRunId)
 	if err != nil {
-		return time.Time{}, err
+		return nil, fmt.Errorf("failed to get source stocks: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var src finnhub.Stock
+		err := rows.Scan(&src)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan source stocks: %w", err)
+		}
+		ret = append(ret, src)
 	}
 
 	return ret, nil
 }
 
-func Stocks(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
-	l, err := latestModification(ctx, tx, `stage."Stocks"`, bo, bon, "")
-	if err != nil {
-		return StagingInfo{}, err
-	}
+func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, tz *time.Location) (ret StagingInfo, err error) {
+	err = backoff.RetryNotify(func() error {
+		var rowsStaged, rowsModified int64
 
-	bo.Reset()
-
-	var rowsAffected int64
-	err = backoff.RetryNotify(util.WrapWithSavePoint(ctx, tx, func() error {
 		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
 		defer cancel()
 
-		r, err := tx.Exec(ctx, `INSERT INTO stage."Stocks" ("Symbol", "DisplaySymbol", "Description", "Created", "Modified") SELECT "Symbol", "DisplaySymbol", "Description", "Created", "Modified" FROM src."Stocks" WHERE "Modified" > $1 ON CONFLICT ("Symbol") DO UPDATE SET "DisplaySymbol" = excluded."DisplaySymbol", "Description" = excluded."Description", "Created" = excluded."Created", "Modified" = excluded."Modified"`, l)
+		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("error while staging stocks: %w", err)
+			return fmt.Errorf("failed to create transaction for staging candles: %w", err)
 		}
-		rowsAffected = r.RowsAffected()
+
+		ecs, err := querySrcCandles(ctx, jobRunId, tx)
+		if err != nil {
+			return err
+		}
+
+		tcs, err := transform.StockCandles(ecs, tz)
+		if err != nil {
+			return err
+		}
+
+		for _, candles := range tcs {
+			for _, candle := range candles {
+				sql := `
+				INSERT INTO stage.candles
+					(job_run_id, symbol, timestamp, open, high, low, close, volume, modified, created) 
+				VALUES 
+					($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+				ON CONFLICT 
+					(symbol, timestamp) 
+				DO UPDATE 
+					SET 
+						job_run_id = excluded.job_run_id,
+						open = excluded.open,
+						high = excluded.high,
+						low = excluded.low,
+						close = excluded.close,
+						volume = excluded.volume,
+						modified = excluded.modified
+					WHERE
+						candles.open IS DISTINCT FROM excluded.open OR
+						candles.high IS DISTINCT FROM excluded.high OR
+						candles.low IS DISTINCT FROM excluded.low OR
+						candles.close IS DISTINCT FROM excluded.close OR
+						candles.volume IS DISTINCT FROM excluded.volume`
+
+				r, err := tx.Exec(ctx, sql, jobRunId, candle.Symbol, candle.Timestamp, candle.Open, candle.High, candle.Low, candle.Close, candle.Volume)
+				if err != nil {
+					return fmt.Errorf("error while staging candles: %w", err)
+				}
+
+				rowsModified += r.RowsAffected()
+				rowsStaged++
+			}
+		}
+
+		err = tx.Commit(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to commit transaction for staging candles: %w", err)
+		}
+
+		ret = StagingInfo{RowsModified: rowsModified, RowsStaged: rowsStaged}
 		return nil
-	}, "stage_stocks"), bo, bon)
+	}, bo, bon)
 
-	if err != nil {
-		return StagingInfo{}, err
-	}
-
-	return StagingInfo{PreviousLatestModification: l, RowsAffected: rowsAffected}, nil
+	return
 }
 
-func Candles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify, symbol string) (StagingInfo, error) {
-	l, err := latestModification(ctx, tx, `stage."Candles"`, bo, bon, `"Symbol" = $1`, symbol)
+func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []extract.StockCandlesWithMetadata, err error) {
+	rows, err := tx.Query(ctx, `SELECT symbol, data FROM src.candles WHERE job_run_id = $1`, jobRunId)
 	if err != nil {
-		return StagingInfo{}, err
+		return nil, fmt.Errorf("failed to get source candles: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var d extract.StockCandlesWithMetadata
+		err := rows.Scan(&d.Symbol, &d.StockCandles)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan source candles: %w", err)
+		}
+		ret = append(ret, d)
 	}
 
-	bo.Reset()
+	return ret, nil
+}
 
-	var rowsAffected int64
-	err = backoff.RetryNotify(util.WrapWithSavePoint(ctx, tx, func() error {
+func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+	err = backoff.RetryNotify(func() error {
+		var rowsStaged, rowsModified int64
+
 		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
 		defer cancel()
 
-		r, err := tx.Exec(ctx, `INSERT INTO stage."Candles" ("Symbol", "Timestamp", "Open", "High", "Low", "Close", "Volume", "Created", "Modified") SELECT "Symbol", "Timestamp", "Open", "High", "Low", "Close", "Volume", "Created", "Modified" FROM src."Candles" WHERE "Modified" > $1 ON CONFLICT ("Symbol", "Timestamp") DO UPDATE SET "Open" = excluded."Open", "High" = excluded."High", "Low" = excluded."Low", "Close" = excluded."Close", "Volume" = excluded."Volume", "Created" = excluded."Created", "Modified" = excluded."Modified"`, l)
+		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("error while staging candles: %w", err)
+			return fmt.Errorf("failed to create transaction for staging company profiles: %w", err)
 		}
-		rowsAffected = r.RowsAffected()
+
+		profiles, err := querySrcCompanyProfiles(ctx, jobRunId, tx)
+		if err != nil {
+			return err
+		}
+
+		tcps, err := transform.CompanyProfiles(profiles)
+		if err != nil {
+			return err
+		}
+
+		for _, tcp := range tcps {
+			sql := `
+				INSERT INTO stage.company_profiles
+					(job_run_id, symbol, exchange, country, currency, name, ipo, market_capitalization, shares_outstanding, logo, phone, web_url, industry, created, modified)
+				VALUES
+					($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
+				ON CONFLICT 
+					(symbol) 
+				DO UPDATE 
+					SET 
+						job_run_id = excluded.job_run_id,
+						exchange = excluded.exchange, 
+						country = excluded.country, 
+						currency = excluded.currency, 
+						name = excluded.name, 
+						ipo = excluded.ipo, 
+						market_capitalization = excluded.market_capitalization, 
+						shares_outstanding = excluded.shares_outstanding, 
+						logo = excluded.logo, 
+						phone = excluded.phone, 
+						web_url = excluded.web_url, 
+						industry = excluded.industry, 
+						modified = excluded.modified
+					WHERE
+						company_profiles.exchange IS DISTINCT FROM excluded.exchange OR
+						company_profiles.country IS DISTINCT FROM excluded.country OR
+						company_profiles.currency IS DISTINCT FROM excluded.currency OR
+						company_profiles.name IS DISTINCT FROM excluded.name OR
+						company_profiles.ipo IS DISTINCT FROM excluded.ipo OR
+						company_profiles.market_capitalization IS DISTINCT FROM excluded.market_capitalization OR
+						company_profiles.shares_outstanding IS DISTINCT FROM excluded.shares_outstanding OR
+						company_profiles.logo IS DISTINCT FROM excluded.logo OR
+						company_profiles.phone IS DISTINCT FROM excluded.phone OR
+						company_profiles.web_url IS DISTINCT FROM excluded.web_url OR
+						company_profiles.industry IS DISTINCT FROM excluded.industry
+`
+
+			r, err := tx.Exec(ctx, sql, jobRunId, tcp.Symbol, tcp.Exchange, tcp.Country, tcp.Currency, tcp.Name, tcp.Ipo, tcp.MarketCapitalization, tcp.SharesOutstanding, tcp.Logo, tcp.Phone, tcp.WebUrl, tcp.Industry)
+			if err != nil {
+				return fmt.Errorf("error while staging company profiles: %w", err)
+			}
+
+			rowsModified += r.RowsAffected()
+			rowsStaged++
+		}
+
+		err = tx.Commit(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to commit transaction for staging company profiles: %w", err)
+		}
+
+		ret = StagingInfo{RowsModified: rowsModified, RowsStaged: rowsStaged}
 		return nil
-	}, "stage_candles"), bo, bon)
+	}, bo, bon)
 
-	if err != nil {
-		return StagingInfo{}, err
-	}
-
-	return StagingInfo{PreviousLatestModification: l, RowsAffected: rowsAffected}, nil
+	return
 }
 
-func CompanyProfiles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
-	l, err := latestModification(ctx, tx, `stage."CompanyProfiles"`, bo, bon, "")
+func querySrcCompanyProfiles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finnhub.CompanyProfile2, err error) {
+	ret = make([]finnhub.CompanyProfile2, 0, 50_000)
+
+	rows, err := tx.Query(ctx, `SELECT data FROM src.company_profiles WHERE job_run_id = $1`, jobRunId)
 	if err != nil {
-		return StagingInfo{}, err
+		return nil, fmt.Errorf("failed to get source company profiles: %w", err)
 	}
+	defer rows.Close()
 
-	bo.Reset()
-
-	var rowsAffected int64
-	err = backoff.RetryNotify(util.WrapWithSavePoint(ctx, tx, func() error {
-		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
-		defer cancel()
-
-		r, err := tx.Exec(ctx, `INSERT INTO stage."CompanyProfiles" ("Symbol", "Exchange", "Country", "Currency", "Name", "Ipo", "MarketCapitalization", "SharesOutstanding", "Logo", "Phone", "WebUrl", "Industry", "Created", "Modified") SELECT "Symbol", "Exchange", "Country", "Currency", "Name", "Ipo", "MarketCapitalization", "SharesOutstanding", "Logo", "Phone", "WebUrl", "Industry", "Created", "Modified" FROM src."CompanyProfiles" WHERE "Modified" > $1 ON CONFLICT ("Symbol") DO UPDATE SET "Exchange" = excluded."Exchange", "Country" = excluded."Country", "Currency" = excluded."Currency", "Name" = excluded."Name", "Ipo" = excluded."Ipo", "MarketCapitalization" = excluded."MarketCapitalization", "SharesOutstanding" = excluded."SharesOutstanding", "Logo" = excluded."Logo", "Phone" = excluded."Phone", "WebUrl" = excluded."WebUrl", "Industry" = excluded."Industry", "Created" = excluded."Created", "Modified" = excluded."Modified"`, l)
+	for rows.Next() {
+		var src finnhub.CompanyProfile2
+		err := rows.Scan(&src)
 		if err != nil {
-			return fmt.Errorf("error while staging company profiles: %w", err)
+			return nil, fmt.Errorf("failed to scan source company profile: %w", err)
 		}
-		rowsAffected = r.RowsAffected()
-		return nil
-	}, "stage_company_profiles"), bo, bon)
-
-	if err != nil {
-		return StagingInfo{}, err
+		ret = append(ret, src)
 	}
 
-	return StagingInfo{PreviousLatestModification: l, RowsAffected: rowsAffected}, nil
+	return ret, nil
 }
 
-func Candles52Wk(ctx context.Context, lg gke.Logger, tx pgx.Tx, latestModification time.Time, symbol string, bo backoff.BackOff, bon backoff.Notify) (StagingInfo, error) {
-	var rowsAffected int64
-	err := backoff.RetryNotify(util.WrapWithSavePoint(ctx, tx, func() error {
+func Candles52Wk(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+	err = backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, util.LongReqTimeout)
 		defer cancel()
 
-		affected, cnt, err := calcAffected(ctx, tx, symbol, latestModification)
+		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create transaction for staging 52wk candles: %w", err)
 		}
-		lg.Defaultf("successfully calculated %d affected 52wk candles for symbol %s", cnt, symbol)
 
-		r, err := updateAffected(ctx, lg, tx, affected)
+		a, ac, err := calcAffected(ctx, jobRunId, tx, symbol)
 		if err != nil {
 			return err
 		}
-		rowsAffected = r
+		lg.Defaultf("successfully calculated %d affected 52wk candles for symbol %s", ac, symbol)
+
+		r, err := updateAffected(ctx, lg, tx, jobRunId, a)
+		if err != nil {
+			return err
+		}
+
+		err = tx.Commit(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to commit transaction for staging 52wk candles: %w", err)
+		}
+
+		ret = StagingInfo{RowsModified: r, RowsStaged: ac}
 		return nil
-	}, "stage_52wk_candles"), bo, bon)
+	}, bo, bon)
 
-	if err != nil {
-		return StagingInfo{}, err
-	}
-
-	return StagingInfo{PreviousLatestModification: latestModification, RowsAffected: rowsAffected}, nil
+	return
 }
 
-func updateAffected(ctx context.Context, lg gke.Logger, tx pgx.Tx, affected map[string][]time.Time) (int64, error) {
-	var updates int64
+func updateAffected(ctx context.Context, lg gke.Logger, tx pgx.Tx, jobRunId uint64, affected map[string][]time.Time) (int64, error) {
+	var rowsModified int64
+	var rowsAffected int64
 
 	for symbol, timestamps := range affected {
+		var symbolRowsModified int64
 		for _, timestamp := range timestamps {
 			ctx, _ := context.WithTimeout(ctx, util.ShortReqTimeout)
-
-			_, err := tx.Exec(ctx, `
-				INSERT INTO stage."Candles52Wk" ("Symbol", "Timestamp", "HighMax", "HighMin", "HighAvg", "HighCount", "LowMax", "LowMin", "LowAvg", "LowCount", "VolumeMax", "VolumeMin", "VolumeAvg", "VolumeCount") 
+			r, err := tx.Exec(ctx, `
+				INSERT INTO stage.candles_52wk 
+					(job_run_id, symbol, timestamp, high_52wk, low_52wk, volume_52wk_avg, open, high, low, close, volume, created, modified) 
 				SELECT 
-					"Candles52Wk"."Symbol", 
-					"Candles52Wk"."Timestamp", 
-					"Candles52Wk"."HighMax", 
-					"Candles52Wk"."HighMin", 
-					"Candles52Wk"."HighAvg", 
-					"Candles52Wk"."HighCount", 
-					"Candles52Wk"."LowMax", 
-					"Candles52Wk"."LowMin", 
-					"Candles52Wk"."LowAvg", 
-					"Candles52Wk"."LowCount", 
-					"Candles52Wk"."VolumeMax", 
-					"Candles52Wk"."VolumeMin", 
-					"Candles52Wk"."VolumeAvg", 
-					"Candles52Wk"."VolumeCount" 
-				FROM src."Candles52Wk" 
+					$1 as job_run_id, symbol, timestamp, high_52wk, low_52wk, volume_52wk_avg, open, high, low, close, volume, created, modified
+				FROM stage.calculate_candles_52wk 
 				WHERE 
-					"Candles52Wk"."Symbol" = $1
-					AND "Candles52Wk"."Timestamp" = $2
-				ON CONFLICT ("Symbol", "Timestamp") 
-				DO UPDATE SET 
-					"Symbol" = excluded."Symbol", 
-					"Timestamp" = excluded."Timestamp", 
-					"HighMax" = excluded."HighMax", 
-					"HighMin" = excluded."HighMin", 
-					"HighAvg" = excluded."HighAvg", 
-					"HighCount" = excluded."HighCount", 
-					"LowMax" = excluded."LowMax", 
-					"LowMin" = excluded."LowMin", 
-					"LowAvg" = excluded."LowAvg", 
-					"LowCount" = excluded."LowCount", 
-					"VolumeMax" = excluded."VolumeMax", 
-					"VolumeMin" = excluded."VolumeMin", 
-					"VolumeAvg" = excluded."VolumeAvg", 
-					"VolumeCount" = excluded."VolumeCount"
-				`, symbol, timestamp)
+					calculate_candles_52wk.symbol = $2
+					AND calculate_candles_52wk.timestamp = $3
+				ON CONFLICT (symbol, timestamp) 
+				DO UPDATE 
+					SET 
+						job_run_id = excluded.job_run_id,
+						high_52wk = excluded.high_52wk, 
+						low_52wk = excluded.low_52wk, 
+						volume_52wk_avg = excluded.volume_52wk_avg, 
+						open = excluded.open, 
+						high = excluded.high, 
+						low = excluded.low,
+						close = excluded.close, 
+						volume = excluded.volume, 
+						modified = excluded.modified,
+						timestamp_52wk_count = excluded.timestamp_52wk_count
+					WHERE 
+						candles_52wk.high_52wk IS DISTINCT FROM excluded.high_52wk OR 
+						candles_52wk.low_52wk IS DISTINCT FROM excluded.low_52wk OR 
+						candles_52wk.volume_52wk_avg IS DISTINCT FROM excluded.volume_52wk_avg OR 
+						candles_52wk.open IS DISTINCT FROM excluded.open OR 
+						candles_52wk.high IS DISTINCT FROM excluded.high OR 
+						candles_52wk.low IS DISTINCT FROM excluded.low OR
+						candles_52wk.close IS DISTINCT FROM excluded.close OR 
+						candles_52wk.volume IS DISTINCT FROM excluded.volume OR
+						candles_52wk.timestamp_52wk_count IS DISTINCT FROM excluded.timestamp_52wk_count
+				`, jobRunId, symbol, timestamp)
 
 			if err != nil {
 				return 0, fmt.Errorf("failed to update 52 week candle %v %v: %w", symbol, timestamp, err)
 			}
 
-			updates++
+			symbolRowsModified += r.RowsAffected()
 		}
+
 		lg.Default(struct {
 			Message    string
 			Symbol     string
 			Timestamps []time.Time
 		}{
-			Message:    fmt.Sprintf("successfully updated %d affected 52wk candles for symbol %s", len(timestamps), symbol),
+			Message:    fmt.Sprintf("successfully updated %d affected 52wk candles for symbol %s (%d rows modified)", len(timestamps), symbol, symbolRowsModified),
 			Symbol:     symbol,
 			Timestamps: timestamps,
 		})
+
+		rowsModified += symbolRowsModified
+		rowsAffected += int64(len(timestamps))
 	}
 
-	lg.Defaultf("successfully updated %d affected 52wk candles for %d symbols", updates, len(affected))
-	return updates, nil
+	lg.Defaultf("successfully updated %d affected 52wk candles for %d symbols (%d rows modified)", rowsAffected, len(affected), rowsModified)
+	return rowsModified, nil
 }
 
-func calcAffected(ctx context.Context, tx pgx.Tx, symbol string, latestModification time.Time) (map[string][]time.Time, int64, error) {
-	var cnt int64
+func calcAffected(ctx context.Context, jobRunId uint64, tx pgx.Tx, symbol string) (map[string][]time.Time, int64, error) {
+	var rowsAffected int64
 	rs, err := tx.Query(ctx, `
 		SELECT
-			affected."Symbol",
-			affected."Timestamp"
-		FROM src."Candles" modified
-		JOIN src."Candles" affected
-			ON modified."Symbol" = affected."Symbol"
-			AND affected."Timestamp" BETWEEN modified."Timestamp" - INTERVAL '52 week' AND modified."Timestamp" 
+			affected.symbol,
+			affected.timestamp
+		FROM stage.candles modified
+		JOIN stage.candles affected
+			ON modified.symbol = affected.symbol
+			AND affected.timestamp BETWEEN modified.timestamp - INTERVAL '52 week' AND modified.timestamp
 		WHERE
-			modified."Symbol" = $1
-			AND modified."Timestamp" > $2
+			modified.symbol = $1
+			AND modified.job_run_id = $2
 		GROUP BY
-			affected."Symbol",
-			affected."Timestamp"
-		`, symbol, latestModification)
+			affected.symbol,
+			affected.timestamp
+		`, symbol, jobRunId)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error while determining affected 52 week candles: %w", err)
 	}
@@ -282,7 +430,7 @@ func calcAffected(ctx context.Context, tx pgx.Tx, symbol string, latestModificat
 			return nil, 0, fmt.Errorf("error while reading affected 52 week candles: %w", err)
 		}
 
-		cnt++
+		rowsAffected++
 		if _, ok := ret[symbol]; !ok {
 			ret[symbol] = []time.Time{timestamp}
 			continue
@@ -291,10 +439,10 @@ func calcAffected(ctx context.Context, tx pgx.Tx, symbol string, latestModificat
 		ret[symbol] = append(ret[symbol], timestamp)
 	}
 
-	return ret, cnt, nil
+	return ret, rowsAffected, nil
 }
 
 type StagingInfo struct {
-	PreviousLatestModification time.Time
-	RowsAffected               int64
+	RowsModified int64
+	RowsStaged   int64
 }

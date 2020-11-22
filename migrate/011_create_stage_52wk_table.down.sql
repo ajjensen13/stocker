@@ -1,1 +1,0 @@
-DROP TABLE IF EXISTS stage."Candles52Wk";

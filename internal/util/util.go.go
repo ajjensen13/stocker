@@ -18,10 +18,6 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package util
 
 import (
-	"context"
-	"fmt"
-	"github.com/cenkalti/backoff/v4"
-	"github.com/jackc/pgx/v4"
 	"time"
 )
 
@@ -30,28 +26,3 @@ const (
 	MedReqTimeout   = 5 * time.Minute
 	LongReqTimeout  = 12 * time.Hour
 )
-
-func WrapWithSavePoint(ctx context.Context, tx pgx.Tx, op backoff.Operation, sp string) backoff.Operation {
-	return func() (err error) {
-		tx, err = tx.Begin(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to create pseudo-transaction %s: %w", sp, err)
-		}
-
-		err = op()
-		if err != nil {
-			rbErr := tx.Rollback(ctx)
-			if rbErr != nil {
-				panic(rbErr)
-			}
-			return err
-		}
-
-		err = tx.Commit(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to commit pseudo-transaction %s: %w", sp, err)
-		}
-
-		return nil
-	}
-}

@@ -18,15 +18,15 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package model
 
 import (
-	"time"
+	"github.com/jackc/pgtype"
 )
 
 type Candle struct {
-	Symbol    string
-	Timestamp time.Time
-	Open      *float32
-	High      *float32
-	Low       *float32
-	Close     *float32
-	Volume    *float32
+	Symbol    pgtype.Text
+	Timestamp pgtype.Timestamptz
+	Open      pgtype.Float4
+	High      pgtype.Float4
+	Low       pgtype.Float4
+	Close     pgtype.Float4
+	Volume    pgtype.Float4
 }

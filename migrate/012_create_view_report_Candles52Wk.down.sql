@@ -1,1 +1,0 @@
-DROP VIEW IF EXISTS report."Candles52Wk"

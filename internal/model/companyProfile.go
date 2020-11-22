@@ -18,20 +18,20 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package model
 
 import (
-	"time"
+	"github.com/jackc/pgtype"
 )
 
 type CompanyProfile struct {
-	Country              string
-	Currency             string
-	Exchange             string
-	Name                 string
-	Symbol               string
-	Ipo                  time.Time
-	MarketCapitalization float32
-	ShareOutstanding     float32
-	Logo                 string
-	Phone                string
-	WebUrl               string
-	Industry             string
+	Country              pgtype.Text
+	Currency             pgtype.Text
+	Exchange             pgtype.Text
+	Name                 pgtype.Text
+	Symbol               pgtype.Text
+	Ipo                  pgtype.Date
+	MarketCapitalization pgtype.Float4
+	SharesOutstanding    pgtype.Float4
+	Logo                 pgtype.Text
+	Phone                pgtype.Text
+	WebUrl               pgtype.Text
+	Industry             pgtype.Text
 }

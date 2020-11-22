@@ -17,8 +17,12 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 package model
 
+import (
+	"github.com/jackc/pgtype"
+)
+
 type Stock struct {
-	Symbol        string
-	DisplaySymbol string
-	Description   string
+	Symbol        pgtype.Text
+	DisplaySymbol pgtype.Text
+	Description   pgtype.Text
 }

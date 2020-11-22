@@ -24,7 +24,7 @@ import (
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/antihax/optional"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -49,9 +49,16 @@ func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.B
 	return result, err
 }
 
-func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, startDate, endDate time.Time) (finnhub.StockCandles, error) {
-	var result finnhub.StockCandles
-	err := backoff.RetryNotify(func() error {
+type StockCandlesWithMetadata struct {
+	Symbol       string
+	Resolution   string
+	To           time.Time
+	From         time.Time
+	StockCandles finnhub.StockCandles
+}
+
+func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, startDate, endDate time.Time) (result StockCandlesWithMetadata, err error) {
+	err = backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, util.ShortReqTimeout)
 		defer cancel()
 
@@ -59,11 +66,11 @@ func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.
 		if err != nil {
 			return handleErr(fmt.Sprintf("error while getting candle for stock %q", stock.Symbol), resp, err)
 		}
-		result = c
+
+		result = StockCandlesWithMetadata{Symbol: stock.Symbol, Resolution: resolution, From: startDate, To: endDate, StockCandles: c}
 		return nil
 	}, bo, bon)
-
-	return result, err
+	return
 }
 
 func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
@@ -83,13 +90,20 @@ func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo b
 	return result, err
 }
 
-func LatestCandles(ctx context.Context, tx pgx.Tx, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
+func LatestCandles(ctx context.Context, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
 	var ret map[string]time.Time
 	err := backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, util.MedReqTimeout)
 		defer cancel()
 
-		rows, err := tx.Query(ctx, `SELECT DISTINCT "Symbol", MAX("Timestamp") FROM src."Candles" GROUP BY "Symbol"`)
+		rows, err := pool.Query(ctx, `
+			SELECT DISTINCT 
+				candles.symbol, max(candles.timestamp) 
+			FROM stage.candles 
+			JOIN metadata.job_run
+				ON candles.job_run_id = job_run.id
+			WHERE job_run.success = TRUE
+			GROUP BY candles.symbol`)
 		if err != nil {
 			return fmt.Errorf("failed to query latest stocks: %w", err)
 		}

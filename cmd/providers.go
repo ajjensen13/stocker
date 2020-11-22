@@ -26,7 +26,6 @@ import (
 	"github.com/ajjensen13/gke"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/golang-migrate/migrate/v4"
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"net/url"
 	"sync"
@@ -164,13 +163,12 @@ func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) 
 	}
 }
 
-func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (finnhub.StockCandles, error) {
-	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution),
-		struct {
-			Symbol             string
-			StartDate, EndDate time.Time
-			Resolution         string
-		}{s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution}))
+func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (extract.StockCandlesWithMetadata, error) {
+	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution), struct {
+		Symbol             string
+		StartDate, EndDate time.Time
+		Resolution         string
+	}{s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution}))
 	return extract.Candles(ctx, client, bo, bon, s, cfg.resolution, cfg.startDate, cfg.endDate)
 }
 
@@ -240,10 +238,6 @@ func provideDbPoolDsn(dsn *url.URL, poolCfg dbConnPoolConfig) (dbPoolDsn, error)
 
 	poolDsn.RawQuery = q.Encode()
 	return poolDsn, nil
-}
-
-func provideDbTx(ctx context.Context, conn *pgxpool.Pool, opts pgx.TxOptions) (pgx.Tx, error) {
-	return conn.BeginTx(ctx, opts)
 }
 
 func provideMigrationSourceURL(cfg *appConfig) string {
