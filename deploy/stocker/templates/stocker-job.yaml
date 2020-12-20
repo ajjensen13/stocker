@@ -1,0 +1,7 @@
+{{- if .Values.job }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Chart.Name }}-job
+{{- include "jobSpec" . | nindent 0 }}
+{{- end }}

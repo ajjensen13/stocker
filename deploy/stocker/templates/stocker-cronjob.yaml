@@ -1,90 +1,10 @@
+{{- if .Values.cronJob.schedule }}
 apiVersion: batch/v1beta1
 kind: CronJob
 metadata:
   name: {{ .Chart.Name }}-cronjob
 spec:
-  schedule: "{{ .Values.schedule }}"
+  schedule: "{{ .Values.cronJob.schedule }}"
   jobTemplate:
-    spec:
-      backoffLimit: 1
-      template:
-        spec:
-          restartPolicy: OnFailure
-          initContainers:
-          - name: stocker-init
-            image: "{{ .Values.image.repository }}{{ with .Values.image.tag }}:{{ . }}{{ end }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
-            imagePullPolicy: {{ default "IfNotPresent" .Values.image.pullPolicy }}
-            command:
-            - /bin/app
-            - migrate
-            - up
-            volumeMounts:
-            - mountPath: /etc/config
-              name: stocker-config-volume
-            - name: k8info-init
-              mountPath: /etc/k8info
-          containers:
-          - name: stocker
-            image: "{{ .Values.image.repository }}{{ with .Values.image.tag }}:{{ . }}{{ end }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
-            imagePullPolicy: {{ default "IfNotPresent" .Values.image.pullPolicy }}
-            command:
-              - /bin/app
-              - etl
-            volumeMounts:
-            - mountPath: /etc/config
-              name: stocker-config-volume
-            - name: k8info
-              mountPath: /etc/k8info
-          volumes:
-          - name: stocker-config-volume
-            projected:
-              sources:
-              - configMap:
-                  name: stocker-config-cm
-              - secret:
-                  name: stocker-api-secret
-              - secret:
-                  name: stocker-db-secret
-          - name: stocker-init-config-volume
-            projected:
-              sources:
-              - configMap:
-                  name: stocker-config-cm
-              - secret:
-                  name: stocker-db-secret
-          - name: k8info
-            projected:
-              sources:
-              - downwardAPI:
-                  items:
-                  - path: pod_name
-                    fieldRef:
-                      fieldPath: metadata.name
-                  - path: pod_namespace
-                    fieldRef:
-                      fieldPath: metadata.namespace
-                  - path: pod_labels
-                    fieldRef:
-                      fieldPath: metadata.labels
-              - configMap:
-                  name: k8-cluster-info-cm
-              - configMap:
-                  name: stocker-container-name-cm
-          - name: k8info-init
-            projected:
-              sources:
-              - downwardAPI:
-                  items:
-                  - path: pod_name
-                    fieldRef:
-                      fieldPath: metadata.name
-                  - path: pod_namespace
-                    fieldRef:
-                      fieldPath: metadata.namespace
-                  - path: pod_labels
-                    fieldRef:
-                      fieldPath: metadata.labels
-              - configMap:
-                  name: k8-cluster-info-cm
-              - configMap:
-                  name: stocker-init-container-name-cm
+    {{- include "jobSpec" . | nindent 4 }}
+{{- end }}

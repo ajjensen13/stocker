@@ -1,0 +1,18 @@
+apiVersion: skaffold/v2beta7
+kind: Config
+build:
+  artifacts:
+  - image: gcr.io/ajensen-1993/stocker
+    docker:
+      dockerfile: build/Dockerfile
+      noCache: false
+deploy:
+  helm:
+    releases:
+      - name: stocker
+        chartPath: deploy/stocker
+        setValues:
+          cronJob.schedule: ""
+          job: "true"
+        artifactOverrides:
+          image: gcr.io/ajensen-1993/stocker

@@ -32,14 +32,13 @@ import (
 	"time"
 
 	"github.com/ajjensen13/stocker/internal/extract"
-	"github.com/ajjensen13/stocker/internal/util"
 )
 
 func provideTimezone(appConfig *appConfig) (*time.Location, error) {
 	if appConfig.Timezone == "" {
 		return time.UTC, nil
 	}
-	return time.LoadLocation(appConfig.Timezone)
+	return time.LoadLocation(string(appConfig.Timezone))
 }
 
 var (
@@ -98,26 +97,7 @@ func provideDbSecrets() (*url.Userinfo, error) {
 	return pkgDbSecrets, nil
 }
 
-func provideBackoffShort() backoff.BackOff {
-	result := backoff.NewExponentialBackOff()
-	result.InitialInterval = time.Second
-	result.MaxElapsedTime = util.ShortReqTimeout * 5
-	return result
-}
-
-func provideBackoffMedium() backoff.BackOff {
-	result := backoff.NewExponentialBackOff()
-	result.InitialInterval = time.Second
-	result.MaxElapsedTime = util.MedReqTimeout * 5
-	return result
-}
-
-func provideBackoffLong() backoff.BackOff {
-	result := backoff.NewExponentialBackOff()
-	result.InitialInterval = time.Minute
-	result.MaxElapsedTime = util.LongReqTimeout * 5
-	return result
-}
+type MaxElapsedTime time.Duration
 
 func provideBackoffNotifier(lg gke.Logger) backoff.Notify {
 	return func(err error, duration time.Duration) {
@@ -168,13 +148,13 @@ func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultAp
 		Symbol             string
 		StartDate, EndDate time.Time
 		Resolution         string
-	}{s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution}))
-	return extract.Candles(ctx, client, bo, bon, s, cfg.resolution, cfg.startDate, cfg.endDate)
+	}{s.Symbol, cfg.startDate, cfg.endDate, string(cfg.resolution)}))
+	return extract.Candles(ctx, client, bo, bon, s, string(cfg.resolution), cfg.startDate, cfg.endDate)
 }
 
 func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {
 	lg.Defaultf("requesting %q stocks from finnhub", cfg.Exchange)
-	return extract.Stocks(ctx, client, bo, bon, cfg.Exchange)
+	return extract.Stocks(ctx, client, bo, bon, string(cfg.Exchange))
 }
 
 func provideCompanyProfiles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
@@ -187,7 +167,7 @@ func provideLatestStocks(latest map[string]time.Time) latestStocks {
 }
 
 func provideDataSourceName(user *url.Userinfo, cfg *appConfig) (dsn *url.URL, err error) {
-	dsn, err = url.Parse(cfg.DataSourceName)
+	dsn, err = url.Parse(string(cfg.DataSourceName))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse data source name: %w", err)
 	}
@@ -240,10 +220,6 @@ func provideDbPoolDsn(dsn *url.URL, poolCfg dbConnPoolConfig) (dbPoolDsn, error)
 	return poolDsn, nil
 }
 
-func provideMigrationSourceURL(cfg *appConfig) string {
-	return cfg.MigrationSourceURL
-}
-
 func provideLogger() (lg gke.Logger, cleanup func()) {
 	lg, cleanup, err := gke.NewLogger(context.Background())
 	if err != nil {
@@ -257,9 +233,9 @@ func provideLogger() (lg gke.Logger, cleanup func()) {
 	return lg, cleanup
 }
 
-func provideMigrator(lg gke.Logger, databaseURL *url.URL, sourceURL string) (m *migrate.Migrate, err error) {
+func provideMigrator(lg gke.Logger, databaseURL *url.URL, sourceURL MigrationSourceURL) (m *migrate.Migrate, err error) {
 	lg.Debugf("creating database migrator: %v -> %v", sourceURL, databaseURL.Redacted())
-	m, err = migrate.New(sourceURL, databaseURL.String())
+	m, err = migrate.New(string(sourceURL), databaseURL.String())
 	if err != nil {
 		return nil, err
 	}

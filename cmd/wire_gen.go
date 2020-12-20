@@ -11,13 +11,11 @@ import (
 	"github.com/ajjensen13/gke"
 	"github.com/ajjensen13/stocker/internal/extract"
 	"github.com/ajjensen13/stocker/internal/load"
-	"github.com/ajjensen13/stocker/internal/model"
 	"github.com/ajjensen13/stocker/internal/stage"
-	"github.com/ajjensen13/stocker/internal/transform"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/google/wire"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"net/url"
-	"time"
 )
 
 import (
@@ -27,26 +25,15 @@ import (
 
 // Injectors from wire.go:
 
-func timezone() (*time.Location, error) {
-	cmdAppConfig, err := provideAppConfig()
-	if err != nil {
-		return nil, err
-	}
-	location, err := provideTimezone(cmdAppConfig)
-	if err != nil {
-		return nil, err
-	}
-	return location, nil
-}
-
-func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) {
+func extractStocks(ctx backoff.BackOffContext, lg gke.Logger) ([]finnhub.Stock, error) {
+	context := provideContext(ctx)
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return nil, err
 	}
-	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
+	cmdApiAuthContext := provideApiAuthContext(context, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
-	backOff := provideBackoffMedium()
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
@@ -59,31 +46,34 @@ func extractStocks(ctx context.Context, lg gke.Logger) ([]finnhub.Stock, error) 
 	return v, nil
 }
 
-func loadStocks(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ss []finnhub.Stock) error {
-	backOff := provideBackoffMedium()
+func loadStocks(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool, ss []finnhub.Stock) error {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	error2 := load.Stocks(ctx, lg, pool, jobRunId, ss, backOff, notify)
+	error2 := load.Stocks(context, lg, pool2, jobRunId, ss, backOff, notify)
 	return error2
 }
 
-func stageStocks(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (stage.StagingInfo, error) {
-	backOff := provideBackoffMedium()
+func stageStocks(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool) (stage.StagingInfo, error) {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Stocks(ctx, lg, pool, jobRunId, backOff, notify)
+	stagingInfo, err := stage.Stocks(context, lg, pool2, jobRunId, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (extract.StockCandlesWithMetadata, error) {
+func extractCandles(ctx backoff.BackOffContext, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (extract.StockCandlesWithMetadata, error) {
+	context := provideContext(ctx)
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return extract.StockCandlesWithMetadata{}, err
 	}
-	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
+	cmdApiAuthContext := provideApiAuthContext(context, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
-	backOff := provideBackoffShort()
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
 	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
@@ -102,57 +92,53 @@ func extractCandles(ctx context.Context, lg gke.Logger, stock finnhub.Stock, lat
 	return stockCandlesWithMetadata, nil
 }
 
-func transformCandles(es finnhub.Stock, symbol string, ec finnhub.StockCandles) ([]model.Candle, error) {
-	location, err := timezone()
-	if err != nil {
-		return nil, err
-	}
-	v, err := transform.Candles(symbol, ec, location)
-	if err != nil {
-		return nil, err
-	}
-	return v, nil
-}
-
-func loadCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ss extract.StockCandlesWithMetadata) error {
-	backOff := provideBackoffMedium()
+func loadCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool, ss extract.StockCandlesWithMetadata) error {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	error2 := load.Candles(ctx, jobRunId, pool, ss, backOff, notify)
+	error2 := load.Candles(context, jobRunId, pool2, ss, backOff, notify)
 	return error2
 }
 
-func stageCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string) (stage.StagingInfo, error) {
-	backOff := provideBackoffMedium()
+func stageCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool, symbol string) (stage.StagingInfo, error) {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	location, err := timezone()
+	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
-	stagingInfo, err := stage.Candles(ctx, jobRunId, pool, backOff, notify, location)
+	location, err := provideTimezone(cmdAppConfig)
+	if err != nil {
+		return stage.StagingInfo{}, err
+	}
+	stagingInfo, err := stage.Candles(context, jobRunId, pool2, backOff, notify, location)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func stage52WkCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string) (stage.StagingInfo, error) {
-	backOff := provideBackoffLong()
+func stage52WkCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool, symbol string) (stage.StagingInfo, error) {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Candles52Wk(ctx, lg, jobRunId, pool, symbol, backOff, notify)
+	stagingInfo, err := stage.Candles52Wk(context, lg, jobRunId, pool2, symbol, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func extractCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+func extractCompanyProfile(ctx backoff.BackOffContext, lg gke.Logger, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+	context := provideContext(ctx)
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
 		return finnhub.CompanyProfile2{}, err
 	}
-	cmdApiAuthContext := provideApiAuthContext(ctx, cmdAppSecrets)
+	cmdApiAuthContext := provideApiAuthContext(context, cmdAppSecrets)
 	defaultApiService := provideApiServiceClient()
-	backOff := provideBackoffShort()
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
 	companyProfile2, err := provideCompanyProfiles(cmdApiAuthContext, lg, defaultApiService, backOff, notify, stock)
 	if err != nil {
@@ -161,35 +147,30 @@ func extractCompanyProfile(ctx context.Context, lg gke.Logger, stock finnhub.Sto
 	return companyProfile2, nil
 }
 
-func transformCompanyProfile(ecp finnhub.CompanyProfile2) (model.CompanyProfile, error) {
-	companyProfile, err := transform.CompanyProfile(ecp)
-	if err != nil {
-		return model.CompanyProfile{}, err
-	}
-	return companyProfile, nil
-}
-
-func loadCompanyProfile(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, cp finnhub.CompanyProfile2) error {
-	backOff := provideBackoffShort()
+func loadCompanyProfile(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool, cp finnhub.CompanyProfile2) error {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	error2 := load.CompanyProfile(ctx, jobRunId, pool, cp, backOff, notify)
+	error2 := load.CompanyProfile(context, jobRunId, pool2, cp, backOff, notify)
 	return error2
 }
 
-func stageCompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (stage.StagingInfo, error) {
-	backOff := provideBackoffMedium()
+func stageCompanyProfiles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool) (stage.StagingInfo, error) {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.CompanyProfiles(ctx, jobRunId, pool, backOff, notify)
+	stagingInfo, err := stage.CompanyProfiles(context, jobRunId, pool2, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
 	return stagingInfo, nil
 }
 
-func queryMostRecentCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (latestStocks, error) {
-	backOff := provideBackoffMedium()
+func queryMostRecentCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool2 *pgxpool.Pool) (latestStocks, error) {
+	context := provideContext(ctx)
+	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	v, err := extract.LatestCandles(ctx, pool, backOff, notify)
+	v, err := extract.LatestCandles(context, pool2, backOff, notify)
 	if err != nil {
 		return nil, err
 	}
@@ -197,23 +178,7 @@ func queryMostRecentCandles(ctx context.Context, lg gke.Logger, jobRunId uint64,
 	return cmdLatestStocks, nil
 }
 
-func dataSourceName() (*url.URL, error) {
-	userinfo, err := provideDbSecrets()
-	if err != nil {
-		return nil, err
-	}
-	cmdAppConfig, err := provideAppConfig()
-	if err != nil {
-		return nil, err
-	}
-	urlURL, err := provideDataSourceName(userinfo, cmdAppConfig)
-	if err != nil {
-		return nil, err
-	}
-	return urlURL, nil
-}
-
-func openPool(ctx context.Context, lg gke.Logger) (*pgxpool.Pool, func(), error) {
+func pool(ctx context.Context, lg gke.Logger) (*pgxpool.Pool, func(), error) {
 	userinfo, err := provideDbSecrets()
 	if err != nil {
 		return nil, nil, err
@@ -222,31 +187,22 @@ func openPool(ctx context.Context, lg gke.Logger) (*pgxpool.Pool, func(), error)
 	if err != nil {
 		return nil, nil, err
 	}
-	urlURL, err := provideDataSourceName(userinfo, cmdAppConfig)
+	url, err := provideDataSourceName(userinfo, cmdAppConfig)
 	if err != nil {
 		return nil, nil, err
 	}
 	cmdDbConnPoolConfig := cmdAppConfig.DbConnPoolConfig
-	cmdDbPoolDsn, err := provideDbPoolDsn(urlURL, cmdDbConnPoolConfig)
+	cmdDbPoolDsn, err := provideDbPoolDsn(url, cmdDbConnPoolConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := provideDbConnPool(ctx, lg, cmdDbPoolDsn)
+	pgxpoolPool, cleanup, err := provideDbConnPool(ctx, lg, cmdDbPoolDsn)
 	if err != nil {
 		return nil, nil, err
 	}
-	return pool, func() {
+	return pgxpoolPool, func() {
 		cleanup()
 	}, nil
-}
-
-func migrationSourceURL() (string, error) {
-	cmdAppConfig, err := provideAppConfig()
-	if err != nil {
-		return "", err
-	}
-	string2 := provideMigrationSourceURL(cmdAppConfig)
-	return string2, nil
 }
 
 func logger() (gke.Logger, func()) {
@@ -257,17 +213,39 @@ func logger() (gke.Logger, func()) {
 }
 
 func migrator(lg gke.Logger) (*migrate.Migrate, error) {
-	urlURL, err := dataSourceName()
+	userinfo, err := provideDbSecrets()
 	if err != nil {
 		return nil, err
 	}
-	string2, err := migrationSourceURL()
+	cmdAppConfig, err := provideAppConfig()
 	if err != nil {
 		return nil, err
 	}
-	migrateMigrate, err := provideMigrator(lg, urlURL, string2)
+	url, err := provideDataSourceName(userinfo, cmdAppConfig)
+	if err != nil {
+		return nil, err
+	}
+	migrationSourceURL := cmdAppConfig.MigrationSourceURL
+	migrateMigrate, err := provideMigrator(lg, url, migrationSourceURL)
 	if err != nil {
 		return nil, err
 	}
 	return migrateMigrate, nil
+}
+
+// wire.go:
+
+var (
+	cfg    = wire.NewSet(provideAppConfig, provideAppSecrets, provideCandleConfig, provideTimezone, wire.FieldsOf(new(*appConfig), "MigrationSourceURL"))
+	client = wire.NewSet(provideApiServiceClient, provideApiAuthContext)
+	db     = wire.NewSet(provideDataSourceName, provideDbSecrets, provideDbConnPool, wire.FieldsOf(new(*appConfig), "DbConnPoolConfig"), provideDbPoolDsn)
+	bo     = wire.NewSet(provideBackOff, provideContext, provideBackoffNotifier)
+)
+
+func provideBackOff(bo2 backoff.BackOffContext) backoff.BackOff {
+	return bo2
+}
+
+func provideContext(bo2 backoff.BackOffContext) context.Context {
+	return bo2.Context()
 }

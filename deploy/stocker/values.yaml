@@ -1,9 +1,7 @@
-image:
-  repository: "gcr.io/ajensen-1993/stocker"
-  pullPolicy: ""
-  tag: ""
-  digest: ""
-schedule: "0 1 * * 0"
+image: gcr.io/ajensen-1993/stocker
+cronJob:
+  schedule: "0 1 * * 0"
+job: false
 config:
   timezone: America/Chicago
   exchange: US

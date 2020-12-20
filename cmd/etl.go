@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/sync/errgroup"
 	"os"
@@ -58,7 +59,7 @@ var etlCmd = &cobra.Command{
 }
 
 func runEtl(ctx context.Context, cmd *cobra.Command, logger gke.Logger) error {
-	pool, poolCleanup, err := openPool(ctx, logger)
+	pool, poolCleanup, err := pool(ctx, logger)
 	if err != nil {
 		return err
 	}
@@ -74,7 +75,6 @@ func runEtl(ctx context.Context, cmd *cobra.Command, logger gke.Logger) error {
 
 	grp, grpCtx := errgroup.WithContext(ctx)
 	grp.Go(func() error {
-
 		ess, err := processStocks(grpCtx, cmd, logger, jobRunId, pool, throttler)
 		if err != nil {
 			return err
@@ -127,7 +127,7 @@ func endJob(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, success bo
 
 func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, throttler *time.Ticker) ([]finnhub.Stock, error) {
 	<-throttler.C
-	ess, err := extractStocks(ctx, lg)
+	ess, err := extractStocks(backoffContext(ctx, 5*time.Minute), lg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)
 	}
@@ -138,13 +138,13 @@ func processStocks(ctx context.Context, cmd *cobra.Command, lg gke.Logger, jobRu
 		return nil, fmt.Errorf("failed to reduce result set using skip and limit: %w", err)
 	}
 
-	err = loadStocks(ctx, lg, jobRunId, pool, ess)
+	err = loadStocks(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool, ess)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load stocks into database: %w", err)
 	}
 	lg.Info(gke.NewFmtMsgData("successfully loaded %d stocks", len(ess)))
 
-	si, err := stageStocks(ctx, lg, jobRunId, pool)
+	si, err := stageStocks(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stage stocks: %w", err)
 	}
@@ -160,7 +160,7 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64,
 		case <-ctx.Done():
 			return fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())
 		case <-throttler.C:
-			ecp, err := extractCompanyProfile(ctx, lg, es)
+			ecp, err := extractCompanyProfile(backoffContext(ctx, 5*time.Minute), lg, es)
 			if err != nil {
 				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve company profile %q from finnhub: %w", es.Symbol, err))
 				_ = lg.Infof("company profile %q will be skipped due to error", es.Symbol)
@@ -172,7 +172,7 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64,
 				continue
 			}
 
-			err = loadCompanyProfile(ctx, lg, jobRunId, pool, ecp)
+			err = loadCompanyProfile(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool, ecp)
 			if err != nil {
 				return fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)
 			}
@@ -181,7 +181,7 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64,
 		}
 	}
 
-	si, err := stageCompanyProfiles(ctx, lg, jobRunId, pool)
+	si, err := stageCompanyProfiles(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool)
 	if err != nil {
 		return fmt.Errorf("failed to stage company profiles: %w", err)
 	}
@@ -192,7 +192,7 @@ func processCompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64,
 }
 
 func processCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
-	latest, err := queryMostRecentCandles(ctx, lg, jobRunId, pool)
+	latest, err := queryMostRecentCandles(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool)
 	if err != nil {
 		return fmt.Errorf("failed to get latest stocks: %w", err)
 	}
@@ -203,26 +203,26 @@ func processCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *p
 		case <-ctx.Done():
 			return fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())
 		case <-throttler.C:
-			ec, err := extractCandles(ctx, lg, es, latest)
+			ec, err := extractCandles(backoffContext(ctx, 5*time.Minute), lg, es, latest)
 			if err != nil {
 				_ = lg.ErrorErr(fmt.Errorf("failed to retrieve stock candles %q from finnhub: %w", es.Symbol, err))
 				_ = lg.Infof("stock candles %q will be skipped due to error", es.Symbol)
 				continue
 			}
 
-			err = loadCandles(ctx, lg, jobRunId, pool, ec)
+			err = loadCandles(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool, ec)
 			if err != nil {
 				return fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)
 			}
 			lg.Defaultf("requested & loaded %d stock candles from finnhub into database: %s", len(ec.StockCandles.T), es.Symbol)
 
-			si, err := stageCandles(ctx, lg, jobRunId, pool, es.Symbol)
+			si, err := stageCandles(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool, es.Symbol)
 			if err != nil {
 				return fmt.Errorf("failed to stage candles for symbol %s: %w", es.Symbol, err)
 			}
 			lg.Defaultf("successfully staged %d candles for symbol %s", si.RowsStaged, es.Symbol)
 
-			si, err = stage52WkCandles(ctx, lg, jobRunId, pool, es.Symbol)
+			si, err = stage52WkCandles(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool, es.Symbol)
 			if err != nil {
 				return fmt.Errorf("failed to stage candles: %w", err)
 			}
@@ -232,15 +232,23 @@ func processCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *p
 	return nil
 }
 
+type (
+	MigrationSourceURL string
+	Timezone           string
+	DataSourceName     string
+	Exchange           string
+	Resolution         string
+)
+
 type appConfig struct {
-	Exchange           string           `json:"exchange"`
-	Resolution         string           `json:"resolution"`
-	StartDate          time.Time        `json:"startDate"`
-	EndDate            time.Time        `json:"endDate"`
-	DataSourceName     string           `json:"dataSourceName"`
-	DbConnPoolConfig   dbConnPoolConfig `json:"dbConnPoolConfig"`
-	Timezone           string           `json:"timezone"`
-	MigrationSourceURL string           `json:"migrationSourceUrl"`
+	Exchange           Exchange           `json:"exchange"`
+	Resolution         Resolution         `json:"resolution"`
+	StartDate          time.Time          `json:"startDate"`
+	EndDate            time.Time          `json:"endDate"`
+	DataSourceName     DataSourceName     `json:"dataSourceName"`
+	DbConnPoolConfig   dbConnPoolConfig   `json:"dbConnPoolConfig"`
+	Timezone           Timezone           `json:"timezone"`
+	MigrationSourceURL MigrationSourceURL `json:"migrationSourceUrl"`
 }
 
 type appSecrets struct {
@@ -294,13 +302,20 @@ func init() {
 	etlCmd.Flags().IntP("limit", "l", -1, "maximum number of stocks to update")
 }
 
+func backoffContext(ctx context.Context, maxElapsedTime time.Duration) backoff.BackOffContext {
+	result := backoff.NewExponentialBackOff()
+	result.InitialInterval = time.Second
+	result.MaxElapsedTime = maxElapsedTime
+	return backoff.WithContext(result, ctx)
+}
+
 type latestStock struct {
 	symbol    string
 	timestamp time.Time
 }
 
 type candleConfig struct {
-	resolution string
+	resolution Resolution
 	startDate  time.Time
 	endDate    time.Time
 }
