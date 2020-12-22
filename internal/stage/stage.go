@@ -127,7 +127,7 @@ func Candles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.
 			}
 
 			for _, candles := range tcs {
-				lg.Debugf("staging %d candles: %v", len(candles))
+				lg.Debugf("staging candles: %v", len(candles))
 
 				for _, candle := range candles {
 					lg.Debugf("staging candles: %v", candle.Symbol.String)
