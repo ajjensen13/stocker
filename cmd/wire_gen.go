@@ -58,7 +58,7 @@ func stageStocks(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, poo
 	context := provideContext(ctx)
 	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Stocks(context, lg, pool2, jobRunId, backOff, notify)
+	stagingInfo, err := stage.Stocks(context, pool2, jobRunId, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
