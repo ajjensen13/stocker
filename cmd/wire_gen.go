@@ -58,7 +58,7 @@ func stageStocks(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, poo
 	context := provideContext(ctx)
 	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.Stocks(context, pool2, jobRunId, backOff, notify)
+	stagingInfo, err := stage.Stocks(context, lg, pool2, jobRunId, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
@@ -112,7 +112,7 @@ func stageCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, po
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
-	stagingInfo, err := stage.Candles(context, jobRunId, pool2, backOff, notify, location)
+	stagingInfo, err := stage.Candles(context, lg, jobRunId, pool2, backOff, notify, location)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
@@ -159,7 +159,7 @@ func stageCompanyProfiles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId ui
 	context := provideContext(ctx)
 	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(lg)
-	stagingInfo, err := stage.CompanyProfiles(context, jobRunId, pool2, backOff, notify)
+	stagingInfo, err := stage.CompanyProfiles(context, lg, jobRunId, pool2, backOff, notify)
 	if err != nil {
 		return stage.StagingInfo{}, err
 	}
