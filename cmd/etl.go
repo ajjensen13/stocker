@@ -24,7 +24,6 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/sync/errgroup"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -52,8 +51,7 @@ var etlCmd = &cobra.Command{
 
 		err := runEtl(ctx, cmd, logger)
 		if err != nil {
-			_ = logger.LogSync(ctx, logging.Entry{Severity: logging.Error, Payload: err.Error()})
-			os.Exit(2)
+			panic(err)
 		}
 	},
 }
@@ -94,7 +92,7 @@ func runEtl(ctx context.Context, cmd *cobra.Command, logger gke.Logger) error {
 	errWait := grp.Wait()
 	errEnd := endJob(ctx, pool, jobRunId, errWait == nil)
 	if errEnd != nil {
-		_ = logger.ErrorErr(errEnd)
+		_ = logger.LogSync(ctx, logging.Entry{Severity: logging.Error, Payload: errEnd.Error()})
 	}
 	return errWait
 }
