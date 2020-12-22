@@ -222,7 +222,7 @@ func processCandles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *p
 
 			si, err = stage52WkCandles(backoffContext(ctx, 5*time.Minute), lg, jobRunId, pool, es.Symbol)
 			if err != nil {
-				return fmt.Errorf("failed to stage candles: %w", err)
+				return fmt.Errorf("failed to stage 52wk candles: %w", err)
 			}
 			lg.Defaultf("successfully staged %d 52wk candles (%d rows modified)", si.RowsStaged, si.RowsModified)
 		}
