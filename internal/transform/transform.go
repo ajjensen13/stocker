@@ -20,9 +20,9 @@ package transform
 import (
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
+	"github.com/ajjensen13/stocker/internal/external"
 	"time"
 
-	"github.com/ajjensen13/stocker/internal/extract"
 	"github.com/ajjensen13/stocker/internal/model"
 )
 
@@ -41,7 +41,7 @@ func Stock(s finnhub.Stock) (out model.Stock) {
 	return
 }
 
-func StockCandles(in []extract.StockCandlesWithMetadata, tz *time.Location) ([][]model.Candle, error) {
+func StockCandles(in []external.StockCandlesWithMetadata, tz *time.Location) ([][]model.Candle, error) {
 	ret := make([][]model.Candle, len(in))
 	for i, cin := range in {
 		c, err := Candles(cin.Symbol, cin.StockCandles, tz)

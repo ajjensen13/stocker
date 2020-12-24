@@ -7,7 +7,7 @@ require (
 	cloud.google.com/go/logging v1.1.2
 	github.com/Finnhub-Stock-API/finnhub-go v1.2.1
 	github.com/ajjensen13/config v0.0.16
-	github.com/ajjensen13/gke v0.0.53
+	github.com/ajjensen13/gke v0.0.55
 	github.com/antihax/optional v1.0.0
 	github.com/cenkalti/backoff/v4 v4.1.0
 	github.com/golang-migrate/migrate/v4 v4.14.1

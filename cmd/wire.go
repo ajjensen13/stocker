@@ -23,8 +23,8 @@ import (
 	"context"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/gke"
-	"github.com/ajjensen13/stocker/internal/extract"
-	"github.com/ajjensen13/stocker/internal/load"
+	"github.com/ajjensen13/stocker/internal/external"
+	"github.com/ajjensen13/stocker/internal/src"
 	"github.com/ajjensen13/stocker/internal/stage"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/golang-migrate/migrate/v4"
@@ -47,51 +47,51 @@ func provideContext(bo backoff.BackOffContext) context.Context {
 	return bo.Context()
 }
 
-func extractStocks(ctx backoff.BackOffContext, lg gke.Logger) (ss []finnhub.Stock, err error) {
-	panic(wire.Build(cfg, client, bo, provideStocks))
+func retrieveStocks(ctx backoff.BackOffContext) (ss []finnhub.Stock, err error) {
+	panic(wire.Build(cfg, client, bo, retrieveStocksImpl))
 }
 
-func loadStocks(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ss []finnhub.Stock) (err error) {
-	panic(wire.Build(bo, load.Stocks))
+func saveStocksFromFinnhub(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, ss []finnhub.Stock) (err error) {
+	panic(wire.Build(bo, src.InsertStocks))
 }
 
-func stageStocks(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (si stage.StagingInfo, err error) {
+func stageStocks(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool) (si stage.StagingInfo, err error) {
 	panic(wire.Build(bo, stage.Stocks))
 }
 
-func extractCandles(ctx backoff.BackOffContext, lg gke.Logger, stock finnhub.Stock, latest latestStocks) (sc extract.StockCandlesWithMetadata, err error) {
-	panic(wire.Build(cfg, client, bo, provideCandles, provideLatestStock))
+func extractCandles(ctx backoff.BackOffContext, stock finnhub.Stock, latest latestStocks) (sc external.StockCandlesWithMetadata, err error) {
+	panic(wire.Build(cfg, client, bo, retrieveCandlesImpl, provideLatestStock))
 }
 
-func loadCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, ss extract.StockCandlesWithMetadata) (err error) {
-	panic(wire.Build(bo, load.Candles))
+func loadCandles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, ss external.StockCandlesWithMetadata) (err error) {
+	panic(wire.Build(bo, src.InsertCandles))
 }
 
-func stageCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string) (si stage.StagingInfo, err error) {
+func stageCandles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, symbol string) (si stage.StagingInfo, err error) {
 	panic(wire.Build(cfg, bo, stage.Candles))
 }
 
-func stage52WkCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string) (si stage.StagingInfo, err error) {
+func stage52WkCandles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, symbol string) (si stage.StagingInfo, err error) {
 	panic(wire.Build(bo, stage.Candles52Wk))
 }
 
-func extractCompanyProfile(ctx backoff.BackOffContext, lg gke.Logger, stock finnhub.Stock) (cp finnhub.CompanyProfile2, err error) {
-	panic(wire.Build(cfg, client, bo, provideCompanyProfiles))
+func retrieveCompanyProfile(ctx backoff.BackOffContext, stock finnhub.Stock) (cp finnhub.CompanyProfile2, err error) {
+	panic(wire.Build(cfg, client, bo, retrieveCompanyProfileImpl))
 }
 
-func loadCompanyProfile(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, cp finnhub.CompanyProfile2) (err error) {
-	panic(wire.Build(bo, load.CompanyProfile))
+func loadCompanyProfile(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, cp finnhub.CompanyProfile2) (err error) {
+	panic(wire.Build(bo, src.InsertCompanyProfile))
 }
 
-func stageCompanyProfiles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (si stage.StagingInfo, err error) {
+func stageCompanyProfiles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool) (si stage.StagingInfo, err error) {
 	panic(wire.Build(bo, stage.CompanyProfiles))
 }
 
-func queryMostRecentCandles(ctx backoff.BackOffContext, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool) (ls latestStocks, err error) {
-	panic(wire.Build(bo, extract.LatestCandles, provideLatestStocks))
+func queryMostRecentCandles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool) (ls latestStocks, err error) {
+	panic(wire.Build(bo, stage.LatestCandles, provideLatestStocks))
 }
 
-func pool(ctx context.Context, lg gke.Logger) (*pgxpool.Pool, func(), error) {
+func pool(ctx context.Context) (*pgxpool.Pool, func(), error) {
 	panic(wire.Build(cfg, db))
 }
 

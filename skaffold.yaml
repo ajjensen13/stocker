@@ -6,13 +6,26 @@ build:
     docker:
       dockerfile: build/Dockerfile
       noCache: false
+      buildArgs:
+        GCFLAGS: -c 1
 deploy:
   helm:
     releases:
-      - name: stocker
-        chartPath: deploy/stocker
-        setValues:
-          cronJob.schedule: ""
-          job: "true"
-        artifactOverrides:
-          image: gcr.io/ajensen-1993/stocker
+    - name: stocker
+      chartPath: deploy/stocker
+      setValues:
+        job: false
+      artifactOverrides:
+        image: gcr.io/ajensen-1993/stocker
+profiles:
+- name: dev
+  patches:
+  - op: replace
+    path: /build/artifacts/0/docker/buildArgs
+    value:
+      GCFLAGS: all=-N -l
+  - op: replace
+    path: /deploy/helm/releases/0/setValues
+    value:
+      cronJob.schedule: ""
+      job: true

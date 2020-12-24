@@ -18,28 +18,29 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package stage
 
 import (
+	"cloud.google.com/go/logging"
 	"context"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
-	"github.com/ajjensen13/gke"
+	"github.com/ajjensen13/stocker/internal/external"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"time"
 
-	"github.com/ajjensen13/stocker/internal/extract"
 	"github.com/ajjensen13/stocker/internal/transform"
 	"github.com/ajjensen13/stocker/internal/util"
 )
 
-func Stocks(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, jobRunId uint64, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+	ctx = util.WithLoggerValue(ctx, "action", "stage")
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
 
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		err := util.RunTx(ctx, pool, func(tx pgx.Tx) error {
+		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 			ess, err := querySrcStocks(ctx, jobRunId, tx)
 			if err != nil {
 				return err
@@ -48,7 +49,7 @@ func Stocks(ctx context.Context, lg gke.Logger, pool *pgxpool.Pool, jobRunId uin
 			stocks := transform.Stocks(ess)
 
 			for _, stock := range stocks {
-				lg.Debugf("staging stock: %v", stock.Symbol)
+				util.Logf(ctx, logging.Debug, "staging stock: %v", stock.Symbol)
 
 				sql := `
 					INSERT INTO stage.stocks
@@ -108,14 +109,15 @@ func querySrcStocks(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finn
 	return ret, nil
 }
 
-func Candles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, tz *time.Location) (ret StagingInfo, err error) {
+func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, tz *time.Location) (ret StagingInfo, err error) {
+	ctx = util.WithLoggerValue(ctx, "action", "stage")
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
 
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		err := util.RunTx(ctx, pool, func(tx pgx.Tx) error {
+		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 			ecs, err := querySrcCandles(ctx, jobRunId, tx)
 			if err != nil {
 				return err
@@ -127,10 +129,10 @@ func Candles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.
 			}
 
 			for _, candles := range tcs {
-				lg.Debugf("staging candles: %v", len(candles))
+				util.Logf(ctx, logging.Debug, "staging candles: %v", len(candles))
 
 				for _, candle := range candles {
-					lg.Debugf("staging candles: %v", candle.Symbol.String)
+					util.Logf(ctx, logging.Debug, "staging candle: %v@%v", candle.Symbol.String, candle.Timestamp.Time.Format(time.RFC3339))
 
 					sql := `
 						INSERT INTO stage.candles
@@ -179,7 +181,7 @@ func Candles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.
 	return
 }
 
-func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []extract.StockCandlesWithMetadata, err error) {
+func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []external.StockCandlesWithMetadata, err error) {
 	rows, err := tx.Query(ctx, `SELECT symbol, data FROM src.candles WHERE job_run_id = $1`, jobRunId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source candles: %w", err)
@@ -187,7 +189,7 @@ func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []ext
 	defer rows.Close()
 
 	for rows.Next() {
-		var d extract.StockCandlesWithMetadata
+		var d external.StockCandlesWithMetadata
 		err := rows.Scan(&d.Symbol, &d.StockCandles)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan source candles: %w", err)
@@ -198,14 +200,15 @@ func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []ext
 	return ret, nil
 }
 
-func CompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+	ctx = util.WithLoggerValue(ctx, "action", "stage")
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
 
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		err := util.RunTx(ctx, pool, func(tx pgx.Tx) error {
+		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 			profiles, err := querySrcCompanyProfiles(ctx, jobRunId, tx)
 			if err != nil {
 				return err
@@ -217,7 +220,7 @@ func CompanyProfiles(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *
 			}
 
 			for _, tcp := range tcps {
-				lg.Debugf("staging company profile: %v", tcp.Symbol)
+				util.Logf(ctx, logging.Debug, "staging company profile: %v", tcp.Symbol)
 
 				sql := `
 					INSERT INTO stage.company_profiles
@@ -299,19 +302,20 @@ func querySrcCompanyProfiles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (r
 	return ret, nil
 }
 
-func Candles52Wk(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxpool.Pool, symbol string, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+func Candles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, symbol string, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+	ctx = util.WithLoggerValue(ctx, "action", "stage")
 	err = backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 
-		err := util.RunTx(ctx, pool, func(tx pgx.Tx) error {
+		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 			a, ac, err := calcAffected(ctx, jobRunId, tx, symbol)
 			if err != nil {
 				return err
 			}
-			lg.Defaultf("successfully calculated %d affected 52wk candles for symbol %s", ac, symbol)
+			util.Logf(ctx, logging.Debug, "successfully calculated %d affected 52wk candles for symbol %s", ac, symbol)
 
-			r, err := updateAffected(ctx, lg, tx, jobRunId, a)
+			r, err := updateAffected(ctx, tx, jobRunId, a)
 			if err != nil {
 				return err
 			}
@@ -330,16 +334,16 @@ func Candles52Wk(ctx context.Context, lg gke.Logger, jobRunId uint64, pool *pgxp
 	return
 }
 
-func updateAffected(ctx context.Context, lg gke.Logger, tx pgx.Tx, jobRunId uint64, affected map[string][]time.Time) (int64, error) {
+func updateAffected(ctx context.Context, tx pgx.Tx, jobRunId uint64, affected map[string][]time.Time) (int64, error) {
 	var rowsModified int64
 	var rowsAffected int64
 
 	for symbol, timestamps := range affected {
 		var symbolRowsModified int64
-		lg.Debugf("updated affected 52wk candles: %s", symbol)
+		util.Logf(ctx, logging.Debug, "updated affected 52wk candles: %s", symbol)
 
 		for _, timestamp := range timestamps {
-			lg.Debugf("updated affected 52wk candles: %s %v", symbol, timestamp)
+			util.Logf(ctx, logging.Debug, "updated affected 52wk candles: %s %v", symbol, timestamp)
 
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			r, err := tx.Exec(ctx, `
@@ -386,21 +390,13 @@ func updateAffected(ctx context.Context, lg gke.Logger, tx pgx.Tx, jobRunId uint
 			cancel()
 		}
 
-		lg.Default(struct {
-			Message    string
-			Symbol     string
-			Timestamps []time.Time
-		}{
-			Message:    fmt.Sprintf("successfully updated %d affected 52wk candles for symbol %s (%d rows modified)", len(timestamps), symbol, symbolRowsModified),
-			Symbol:     symbol,
-			Timestamps: timestamps,
-		})
+		util.Logf(ctx, logging.Debug, fmt.Sprintf("successfully updated %d affected 52wk candles for symbol %s (%d rows modified)", len(timestamps), symbol, symbolRowsModified))
 
 		rowsModified += symbolRowsModified
 		rowsAffected += int64(len(timestamps))
 	}
 
-	lg.Defaultf("successfully updated %d affected 52wk candles for %d symbols (%d rows modified)", rowsAffected, len(affected), rowsModified)
+	util.Logf(ctx, logging.Debug, "successfully updated %d affected 52wk candles for %d symbols (%d rows modified)", rowsAffected, len(affected), rowsModified)
 	return rowsModified, nil
 }
 
@@ -450,4 +446,45 @@ func calcAffected(ctx context.Context, jobRunId uint64, tx pgx.Tx, symbol string
 type StagingInfo struct {
 	RowsModified int64
 	RowsStaged   int64
+}
+
+func LatestCandles(ctx context.Context, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
+	var ret map[string]time.Time
+	err := backoff.RetryNotify(func() error {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+
+		return util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+			rows, err := pool.Query(ctx, `
+				SELECT DISTINCT 
+					candles.symbol, max(candles.timestamp) 
+				FROM stage.candles 
+				JOIN metadata.job_run
+					ON candles.job_run_id = job_run.id
+				WHERE job_run.success = TRUE
+				GROUP BY candles.symbol`)
+			if err != nil {
+				return fmt.Errorf("failed to query latest stocks: %w", err)
+			}
+			defer rows.Close()
+
+			ret = make(map[string]time.Time)
+			for rows.Next() {
+				var symbol string
+				var timestamp time.Time
+				err := rows.Scan(&symbol, &timestamp)
+				if err != nil {
+					return fmt.Errorf("failed to parse latest stocks: %w", err)
+				}
+				ret[symbol] = timestamp
+			}
+			return nil
+		})
+	}, bo, bon)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return ret, nil
 }

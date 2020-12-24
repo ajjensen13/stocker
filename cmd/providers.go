@@ -18,20 +18,23 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package cmd
 
 import (
+	"cloud.google.com/go/logging"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/config"
 	"github.com/ajjensen13/gke"
+	"github.com/ajjensen13/stocker/internal/util"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"net/url"
 	"sync"
 	"time"
 
-	"github.com/ajjensen13/stocker/internal/extract"
+	"github.com/ajjensen13/stocker/internal/external"
 )
 
 func provideTimezone(appConfig *appConfig) (*time.Location, error) {
@@ -99,13 +102,13 @@ func provideDbSecrets() (*url.Userinfo, error) {
 
 type MaxElapsedTime time.Duration
 
-func provideBackoffNotifier(lg gke.Logger) backoff.Notify {
+func provideBackoffNotifier(ctx context.Context) backoff.Notify {
 	return func(err error, duration time.Duration) {
-		if errors.Is(err, extract.ErrToManyRequests) {
-			lg.Info(gke.NewFmtMsgData("request exceeded rate limit, waiting %v before retrying: %v", duration, err))
+		if errors.Is(err, external.ErrToManyRequests) {
+			util.Logf(ctx, logging.Debug, "request exceeded rate limit, waiting %v before retrying: %v", duration, err)
 			return
 		}
-		lg.Warning(gke.NewFmtMsgData("request failed, waiting %v before retrying: %v", duration, err))
+		util.Logf(ctx, logging.Warning, "request failed, waiting %v before retrying: %v", duration, err)
 	}
 }
 
@@ -143,27 +146,26 @@ func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) 
 	}
 }
 
-func provideCandles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (extract.StockCandlesWithMetadata, error) {
-	lg.Default(gke.NewMsgData(fmt.Sprintf("requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution), struct {
-		Symbol             string
-		StartDate, EndDate time.Time
-		Resolution         string
-	}{s.Symbol, cfg.startDate, cfg.endDate, string(cfg.resolution)}))
-	return extract.Candles(ctx, client, bo, bon, s, string(cfg.resolution), cfg.startDate, cfg.endDate)
+func retrieveCandlesImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (external.StockCandlesWithMetadata, error) {
+	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
+	util.Logf(ctx, logging.Debug, "requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution)
+	return external.RequestCandles(ctx, client, bo, bon, s, string(cfg.resolution), cfg.startDate, cfg.endDate)
 }
 
-func provideStocks(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {
-	lg.Defaultf("requesting %q stocks from finnhub", cfg.Exchange)
-	return extract.Stocks(ctx, client, bo, bon, string(cfg.Exchange))
+func retrieveStocksImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {
+	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
+	util.Logf(ctx, logging.Debug, "requesting %q stocks from finnhub", cfg.Exchange)
+	return external.RequestStocks(ctx, client, bo, bon, string(cfg.Exchange))
 }
 
-func provideCompanyProfiles(ctx apiAuthContext, lg gke.Logger, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
-	lg.Defaultf("requesting %q company profiles from finnhub", stock.Symbol)
-	return extract.CompanyProfile(ctx, client, bo, bon, stock)
+func retrieveCompanyProfileImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
+	util.Logf(ctx, logging.Debug, "requesting %q company profiles from finnhub", stock.Symbol)
+	return external.RequestCompanyProfile(ctx, client, bo, bon, stock)
 }
 
 func provideLatestStocks(latest map[string]time.Time) latestStocks {
-	return latestStocks(latest)
+	return latest
 }
 
 func provideDataSourceName(user *url.Userinfo, cfg *appConfig) (dsn *url.URL, err error) {
@@ -178,10 +180,16 @@ func provideDataSourceName(user *url.Userinfo, cfg *appConfig) (dsn *url.URL, er
 
 type dbPoolDsn *url.URL
 
-func provideDbConnPool(ctx context.Context, lg gke.Logger, dsn dbPoolDsn) (ret *pgxpool.Pool, cleanup func(), err error) {
+func provideDbConnPool(ctx context.Context, dsn dbPoolDsn) (ret *pgxpool.Pool, cleanup func(), err error) {
 	u := (*url.URL)(dsn)
-	lg.Debugf("creating database connection pool: %v", u.Redacted())
-	pool, err := pgxpool.Connect(ctx, u.String())
+	cfg, err := pgxpool.ParseConfig(u.String())
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("failed to parse pgxpool config: %w", err)
+	}
+	cfg.ConnConfig.Logger = pgxLoggerAdapter{}
+	cfg.ConnConfig.LogLevel = pgx.LogLevelWarn
+
+	pool, err := pgxpool.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("failed to open database connection pool: %w", err)
 	}
@@ -234,7 +242,6 @@ func provideLogger() (lg gke.Logger, cleanup func()) {
 }
 
 func provideMigrator(lg gke.Logger, databaseURL *url.URL, sourceURL MigrationSourceURL) (m *migrate.Migrate, err error) {
-	lg.Debugf("creating database migrator: %v -> %v", sourceURL, databaseURL.Redacted())
 	m, err = migrate.New(string(sourceURL), databaseURL.String())
 	if err != nil {
 		return nil, err
@@ -253,4 +260,26 @@ func (m migrationLogger) Printf(format string, v ...interface{}) {
 
 func (m migrationLogger) Verbose() bool {
 	return false
+}
+
+type pgxLoggerAdapter struct{}
+
+func (p pgxLoggerAdapter) Log(ctx context.Context, level pgx.LogLevel, msg string, data map[string]interface{}) {
+	var severity logging.Severity
+	switch level {
+	case pgx.LogLevelError:
+		severity = logging.Error
+	case pgx.LogLevelWarn:
+		severity = logging.Warning
+	case pgx.LogLevelInfo:
+		severity = logging.Info
+	case pgx.LogLevelDebug:
+		severity = logging.Debug
+	case pgx.LogLevelTrace, pgx.LogLevelNone:
+		severity = logging.Default
+	default:
+		panic(fmt.Sprintf("unknown log level: %v", level))
+	}
+
+	util.Logf(context.WithValue(ctx, "pgx_data", data), severity, msg)
 }

@@ -15,24 +15,21 @@ You should have received a copy of the GNU General Public License
 along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
-package extract
+package external
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
-	"github.com/ajjensen13/stocker/internal/util"
 	"github.com/antihax/optional"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
 	"io/ioutil"
 	"net/http"
 	"time"
 )
 
-func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, exchange string) ([]finnhub.Stock, error) {
+func RequestStocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, exchange string) ([]finnhub.Stock, error) {
 	var result []finnhub.Stock
 	err := backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -49,15 +46,7 @@ func Stocks(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.B
 	return result, err
 }
 
-type StockCandlesWithMetadata struct {
-	Symbol       string
-	Resolution   string
-	To           time.Time
-	From         time.Time
-	StockCandles finnhub.StockCandles
-}
-
-func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, startDate, endDate time.Time) (result StockCandlesWithMetadata, err error) {
+func RequestCandles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock, resolution string, startDate, endDate time.Time) (result StockCandlesWithMetadata, err error) {
 	err = backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -73,7 +62,7 @@ func Candles(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.
 	return
 }
 
-func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+func RequestCompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
 	var result finnhub.CompanyProfile2
 	err := backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -88,47 +77,6 @@ func CompanyProfile(ctx context.Context, client *finnhub.DefaultApiService, bo b
 	}, bo, bon)
 
 	return result, err
-}
-
-func LatestCandles(ctx context.Context, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
-	var ret map[string]time.Time
-	err := backoff.RetryNotify(func() error {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-
-		return util.RunTx(ctx, pool, func(tx pgx.Tx) error {
-			rows, err := pool.Query(ctx, `
-				SELECT DISTINCT 
-					candles.symbol, max(candles.timestamp) 
-				FROM stage.candles 
-				JOIN metadata.job_run
-					ON candles.job_run_id = job_run.id
-				WHERE job_run.success = TRUE
-				GROUP BY candles.symbol`)
-			if err != nil {
-				return fmt.Errorf("failed to query latest stocks: %w", err)
-			}
-			defer rows.Close()
-
-			ret = make(map[string]time.Time)
-			for rows.Next() {
-				var symbol string
-				var timestamp time.Time
-				err := rows.Scan(&symbol, &timestamp)
-				if err != nil {
-					return fmt.Errorf("failed to parse latest stocks: %w", err)
-				}
-				ret[symbol] = timestamp
-			}
-			return nil
-		})
-	}, bo, bon)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return ret, nil
 }
 
 var ErrToManyRequests = errors.New("error: too many requests")
@@ -149,4 +97,12 @@ func handleErr(msg string, resp *http.Response, err error) error {
 		msg = fmt.Sprintf("%s (%s)", msg, body)
 	}
 	return fmt.Errorf("%s: %w", msg, err)
+}
+
+type StockCandlesWithMetadata struct {
+	Symbol       string
+	Resolution   string
+	To           time.Time
+	From         time.Time
+	StockCandles finnhub.StockCandles
 }
