@@ -146,19 +146,19 @@ func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) 
 	}
 }
 
-func retrieveCandlesImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (external.StockCandlesWithMetadata, error) {
+func retrieveSrcCandlesImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (external.StockCandlesWithMetadata, error) {
 	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
 	util.Logf(ctx, logging.Debug, "requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution)
 	return external.RequestCandles(ctx, client, bo, bon, s, string(cfg.resolution), cfg.startDate, cfg.endDate)
 }
 
-func retrieveStocksImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {
+func retrieveSrcStocksImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {
 	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
 	util.Logf(ctx, logging.Debug, "requesting %q stocks from finnhub", cfg.Exchange)
 	return external.RequestStocks(ctx, client, bo, bon, string(cfg.Exchange))
 }
 
-func retrieveCompanyProfileImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
+func retrieveSrcCompanyProfileImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
 	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
 	util.Logf(ctx, logging.Debug, "requesting %q company profiles from finnhub", stock.Symbol)
 	return external.RequestCompanyProfile(ctx, client, bo, bon, stock)
@@ -193,6 +193,34 @@ func provideDbConnPool(ctx context.Context, dsn dbPoolDsn) (ret *pgxpool.Pool, c
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("failed to open database connection pool: %w", err)
 	}
+
+	util.Logf(ctx, logging.Debug, "database connection pool created: %#v", struct {
+		MaxConnLifetime   time.Duration
+		MaxConnIdleTime   time.Duration
+		MaxConns          int32
+		MinConns          int32
+		HealthCheckPeriod time.Duration
+		LazyConnect       bool
+		Host              string
+		Port              uint16
+		Database          string
+		User              string
+		ConnectTimeout    time.Duration
+		LogLevel          string
+	}{
+		MaxConnLifetime:   cfg.MaxConnLifetime,
+		MaxConnIdleTime:   cfg.MaxConnIdleTime,
+		MaxConns:          cfg.MaxConns,
+		MinConns:          cfg.MinConns,
+		HealthCheckPeriod: cfg.HealthCheckPeriod,
+		LazyConnect:       cfg.LazyConnect,
+		Host:              cfg.ConnConfig.Host,
+		Port:              cfg.ConnConfig.Port,
+		Database:          cfg.ConnConfig.Database,
+		User:              cfg.ConnConfig.User,
+		ConnectTimeout:    cfg.ConnConfig.ConnectTimeout,
+		LogLevel:          cfg.ConnConfig.LogLevel.String(),
+	})
 
 	return pool, pool.Close, nil
 }
@@ -281,5 +309,5 @@ func (p pgxLoggerAdapter) Log(ctx context.Context, level pgx.LogLevel, msg strin
 		panic(fmt.Sprintf("unknown log level: %v", level))
 	}
 
-	util.Logf(context.WithValue(ctx, "pgx_data", data), severity, msg)
+	util.Logf(util.WithLoggerValue(ctx, "pgx_data", data), severity, msg)
 }

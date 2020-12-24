@@ -34,6 +34,7 @@ import (
 
 func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
+
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
 
@@ -49,7 +50,7 @@ func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff
 			stocks := transform.Stocks(ess)
 
 			for _, stock := range stocks {
-				util.Logf(ctx, logging.Debug, "staging stock: %v", stock.Symbol)
+				ctx := util.WithLoggerValue(ctx, "symbol", stock.Symbol)
 
 				sql := `
 					INSERT INTO stage.stocks
@@ -75,6 +76,8 @@ func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff
 
 				rowsModified += r.RowsAffected()
 				rowsStaged++
+
+				util.Logf(ctx, logging.Debug, "successfully staged stock: %v", stock.Symbol)
 			}
 			return nil
 		})
@@ -113,15 +116,22 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
+		var ecs []external.StockCandlesWithMetadata
 
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
+		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) (err error) {
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
 
-		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
-			ecs, err := querySrcCandles(ctx, jobRunId, tx)
-			if err != nil {
-				return err
-			}
+			ecs, err = querySrcCandles(ctx, jobRunId, tx)
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("failed to query candles to stage: %w", err)
+		}
+
+		err = util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
 
 			tcs, err := transform.StockCandles(ecs, tz)
 			if err != nil {
@@ -132,7 +142,7 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 				util.Logf(ctx, logging.Debug, "staging candles: %v", len(candles))
 
 				for _, candle := range candles {
-					util.Logf(ctx, logging.Debug, "staging candle: %v@%v", candle.Symbol.String, candle.Timestamp.Time.Format(time.RFC3339))
+					util.Logf(ctx, logging.Debug, "staging candle: %v @ %v", candle.Symbol.String, candle.Timestamp.Time.Format(time.RFC3339))
 
 					sql := `
 						INSERT INTO stage.candles
@@ -202,17 +212,25 @@ func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []ext
 
 func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
+
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
+		var profiles []finnhub.CompanyProfile2
 
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
+		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) (err error) {
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
 
-		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
-			profiles, err := querySrcCompanyProfiles(ctx, jobRunId, tx)
-			if err != nil {
-				return err
-			}
+			profiles, err = querySrcCompanyProfiles(ctx, jobRunId, tx)
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("failed to query company profiles to stage: %w", err)
+		}
+
+		err = util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
 
 			tcps, err := transform.CompanyProfiles(profiles)
 			if err != nil {
@@ -220,8 +238,7 @@ func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, b
 			}
 
 			for _, tcp := range tcps {
-				util.Logf(ctx, logging.Debug, "staging company profile: %v", tcp.Symbol)
-
+				ctx := util.WithLoggerValue(ctx, "symbol", tcp.Symbol)
 				sql := `
 					INSERT INTO stage.company_profiles
 						(job_run_id, symbol, exchange, country, currency, name, ipo, market_capitalization, shares_outstanding, logo, phone, web_url, industry, created, modified)
@@ -265,6 +282,8 @@ func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, b
 
 				rowsModified += r.RowsAffected()
 				rowsStaged++
+
+				util.Logf(ctx, logging.Debug, "successfully staged company profile: %v", tcp.Symbol)
 			}
 
 			return nil
@@ -306,10 +325,10 @@ func Candles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, symbo
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
 
 	err = backoff.RetryNotify(func() error {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-
 		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
+
 			a, ac, err := calcAffected(ctx, jobRunId, tx, symbol)
 			if err != nil {
 				return err

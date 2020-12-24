@@ -25,7 +25,7 @@ import (
 
 // Injectors from wire.go:
 
-func retrieveStocks(ctx backoff.BackOffContext) ([]finnhub.Stock, error) {
+func retrieveSrcStocks(ctx backoff.BackOffContext) ([]finnhub.Stock, error) {
 	context := provideContext(ctx)
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
@@ -39,14 +39,14 @@ func retrieveStocks(ctx backoff.BackOffContext) ([]finnhub.Stock, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := retrieveStocksImpl(cmdApiAuthContext, defaultApiService, backOff, notify, cmdAppConfig)
+	v, err := retrieveSrcStocksImpl(cmdApiAuthContext, defaultApiService, backOff, notify, cmdAppConfig)
 	if err != nil {
 		return nil, err
 	}
 	return v, nil
 }
 
-func saveStocksFromFinnhub(ctx backoff.BackOffContext, jobRunId uint64, pool2 *pgxpool.Pool, ss []finnhub.Stock) error {
+func insertSrcStocks(ctx backoff.BackOffContext, jobRunId uint64, pool2 *pgxpool.Pool, ss []finnhub.Stock) error {
 	context := provideContext(ctx)
 	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(context)
@@ -65,7 +65,7 @@ func stageStocks(ctx backoff.BackOffContext, jobRunId uint64, pool2 *pgxpool.Poo
 	return stagingInfo, nil
 }
 
-func extractCandles(ctx backoff.BackOffContext, stock finnhub.Stock, latest latestStocks) (external.StockCandlesWithMetadata, error) {
+func retrieveSrcCandles(ctx backoff.BackOffContext, stock finnhub.Stock, latest latestStocks) (external.StockCandlesWithMetadata, error) {
 	context := provideContext(ctx)
 	cmdAppSecrets, err := provideAppSecrets()
 	if err != nil {
@@ -85,14 +85,14 @@ func extractCandles(ctx backoff.BackOffContext, stock finnhub.Stock, latest late
 		return external.StockCandlesWithMetadata{}, err
 	}
 	cmdCandleConfig := provideCandleConfig(cmdAppConfig, cmdLatestStock, location)
-	stockCandlesWithMetadata, err := retrieveCandlesImpl(cmdApiAuthContext, defaultApiService, backOff, notify, stock, cmdCandleConfig)
+	stockCandlesWithMetadata, err := retrieveSrcCandlesImpl(cmdApiAuthContext, defaultApiService, backOff, notify, stock, cmdCandleConfig)
 	if err != nil {
 		return external.StockCandlesWithMetadata{}, err
 	}
 	return stockCandlesWithMetadata, nil
 }
 
-func loadCandles(ctx backoff.BackOffContext, jobRunId uint64, pool2 *pgxpool.Pool, ss external.StockCandlesWithMetadata) error {
+func insertSrcCandles(ctx backoff.BackOffContext, jobRunId uint64, pool2 *pgxpool.Pool, ss external.StockCandlesWithMetadata) error {
 	context := provideContext(ctx)
 	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(context)
@@ -140,14 +140,14 @@ func retrieveCompanyProfile(ctx backoff.BackOffContext, stock finnhub.Stock) (fi
 	defaultApiService := provideApiServiceClient()
 	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(context)
-	companyProfile2, err := retrieveCompanyProfileImpl(cmdApiAuthContext, defaultApiService, backOff, notify, stock)
+	companyProfile2, err := retrieveSrcCompanyProfileImpl(cmdApiAuthContext, defaultApiService, backOff, notify, stock)
 	if err != nil {
 		return finnhub.CompanyProfile2{}, err
 	}
 	return companyProfile2, nil
 }
 
-func loadCompanyProfile(ctx backoff.BackOffContext, jobRunId uint64, pool2 *pgxpool.Pool, cp finnhub.CompanyProfile2) error {
+func insertSrcCompanyProfile(ctx backoff.BackOffContext, jobRunId uint64, pool2 *pgxpool.Pool, cp finnhub.CompanyProfile2) error {
 	context := provideContext(ctx)
 	backOff := provideBackOff(ctx)
 	notify := provideBackoffNotifier(context)

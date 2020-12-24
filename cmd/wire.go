@@ -47,11 +47,11 @@ func provideContext(bo backoff.BackOffContext) context.Context {
 	return bo.Context()
 }
 
-func retrieveStocks(ctx backoff.BackOffContext) (ss []finnhub.Stock, err error) {
-	panic(wire.Build(cfg, client, bo, retrieveStocksImpl))
+func retrieveSrcStocks(ctx backoff.BackOffContext) (ss []finnhub.Stock, err error) {
+	panic(wire.Build(cfg, client, bo, retrieveSrcStocksImpl))
 }
 
-func saveStocksFromFinnhub(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, ss []finnhub.Stock) (err error) {
+func insertSrcStocks(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, ss []finnhub.Stock) (err error) {
 	panic(wire.Build(bo, src.InsertStocks))
 }
 
@@ -59,11 +59,11 @@ func stageStocks(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool
 	panic(wire.Build(bo, stage.Stocks))
 }
 
-func extractCandles(ctx backoff.BackOffContext, stock finnhub.Stock, latest latestStocks) (sc external.StockCandlesWithMetadata, err error) {
-	panic(wire.Build(cfg, client, bo, retrieveCandlesImpl, provideLatestStock))
+func retrieveSrcCandles(ctx backoff.BackOffContext, stock finnhub.Stock, latest latestStocks) (sc external.StockCandlesWithMetadata, err error) {
+	panic(wire.Build(cfg, client, bo, retrieveSrcCandlesImpl, provideLatestStock))
 }
 
-func loadCandles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, ss external.StockCandlesWithMetadata) (err error) {
+func insertSrcCandles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, ss external.StockCandlesWithMetadata) (err error) {
 	panic(wire.Build(bo, src.InsertCandles))
 }
 
@@ -76,10 +76,10 @@ func stage52WkCandles(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool
 }
 
 func retrieveCompanyProfile(ctx backoff.BackOffContext, stock finnhub.Stock) (cp finnhub.CompanyProfile2, err error) {
-	panic(wire.Build(cfg, client, bo, retrieveCompanyProfileImpl))
+	panic(wire.Build(cfg, client, bo, retrieveSrcCompanyProfileImpl))
 }
 
-func loadCompanyProfile(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, cp finnhub.CompanyProfile2) (err error) {
+func insertSrcCompanyProfile(ctx backoff.BackOffContext, jobRunId uint64, pool *pgxpool.Pool, cp finnhub.CompanyProfile2) (err error) {
 	panic(wire.Build(bo, src.InsertCompanyProfile))
 }
 

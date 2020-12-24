@@ -150,7 +150,7 @@ func processStocks(ctx context.Context, cmd *cobra.Command, jobRunId uint64, poo
 	ctx = util.WithLoggerValue(ctx, "type", "stock")
 
 	<-throttler.C
-	ess, err := retrieveStocks(backoffContext(ctx, 5*time.Minute))
+	ess, err := retrieveSrcStocks(backoffContext(ctx, 5*time.Minute))
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)
 	}
@@ -161,7 +161,7 @@ func processStocks(ctx context.Context, cmd *cobra.Command, jobRunId uint64, poo
 		return nil, fmt.Errorf("failed to reduce result set using skip and limit: %w", err)
 	}
 
-	err = saveStocksFromFinnhub(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ess)
+	err = insertSrcStocks(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ess)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load stocks into database: %w", err)
 	}
@@ -181,6 +181,8 @@ func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.
 
 	success := 0
 	for _, es := range ess {
+		ctx := util.WithLoggerValue(ctx, "symbol", es.Symbol)
+
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())
@@ -197,7 +199,7 @@ func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.
 				continue
 			}
 
-			err = loadCompanyProfile(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ecp)
+			err = insertSrcCompanyProfile(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ecp)
 			if err != nil {
 				return fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)
 			}
@@ -227,17 +229,19 @@ func processCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, es
 	util.Logf(ctx, logging.Info, "extracted %d existing candles from database", len(latest))
 
 	for _, es := range ess {
+		ctx := util.WithLoggerValue(ctx, "symbol", es.Symbol)
+
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())
 		case <-throttler.C:
-			ec, err := extractCandles(backoffContext(ctx, 5*time.Minute), es, latest)
+			ec, err := retrieveSrcCandles(backoffContext(ctx, 5*time.Minute), es, latest)
 			if err != nil {
 				util.Logf(ctx, logging.Error, "failed to retrieve stock candles %q from finnhub: %v", es.Symbol, err)
 				continue
 			}
 
-			err = loadCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ec)
+			err = insertSrcCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ec)
 			if err != nil {
 				return fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)
 			}
