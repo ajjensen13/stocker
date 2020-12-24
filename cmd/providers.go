@@ -194,35 +194,39 @@ func provideDbConnPool(ctx context.Context, dsn dbPoolDsn) (ret *pgxpool.Pool, c
 		return nil, func() {}, fmt.Errorf("failed to open database connection pool: %w", err)
 	}
 
-	util.Logf(ctx, logging.Debug, "database connection pool created: %#v", struct {
-		MaxConnLifetime   time.Duration
-		MaxConnIdleTime   time.Duration
+	util.Logf(util.WithLoggerValue(ctx, "pg_conn_pool_info", struct {
+		MaxConnLifetime   string
+		MaxConnIdleTime   string
 		MaxConns          int32
 		MinConns          int32
-		HealthCheckPeriod time.Duration
+		HealthCheckPeriod string
 		LazyConnect       bool
 		Host              string
 		Port              uint16
 		Database          string
 		User              string
-		ConnectTimeout    time.Duration
+		ConnectTimeout    string
 		LogLevel          string
 	}{
-		MaxConnLifetime:   cfg.MaxConnLifetime,
-		MaxConnIdleTime:   cfg.MaxConnIdleTime,
+		MaxConnLifetime:   cfg.MaxConnLifetime.String(),
+		MaxConnIdleTime:   cfg.MaxConnIdleTime.String(),
 		MaxConns:          cfg.MaxConns,
 		MinConns:          cfg.MinConns,
-		HealthCheckPeriod: cfg.HealthCheckPeriod,
+		HealthCheckPeriod: cfg.HealthCheckPeriod.String(),
 		LazyConnect:       cfg.LazyConnect,
 		Host:              cfg.ConnConfig.Host,
 		Port:              cfg.ConnConfig.Port,
 		Database:          cfg.ConnConfig.Database,
 		User:              cfg.ConnConfig.User,
-		ConnectTimeout:    cfg.ConnConfig.ConnectTimeout,
-		LogLevel:          cfg.ConnConfig.LogLevel.String(),
-	})
+		// _: 			   cfg.ConnConfig.Password,
+		ConnectTimeout: cfg.ConnConfig.ConnectTimeout.String(),
+		LogLevel:       cfg.ConnConfig.LogLevel.String(),
+	}), logging.Debug, "database connection pool created")
 
-	return pool, pool.Close, nil
+	return pool, func() {
+		pool.Close()
+		util.Logf(ctx, logging.Debug, "database connection pool closed")
+	}, nil
 }
 
 func provideDbPoolDsn(dsn *url.URL, poolCfg dbConnPoolConfig) (dbPoolDsn, error) {
