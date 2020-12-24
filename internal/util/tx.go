@@ -46,8 +46,9 @@ func RunTx(ctx context.Context, pool *pgxpool.Pool, f func(ctx context.Context, 
 
 	err = tx.Commit(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to commit transaction [%d/%d]: %w", pid, txid, err)
+		return fmt.Errorf("failed to commit database transaction [%d -> %d]: %v", pid, txid, err)
 	}
 
+	Logf(ctx, logging.Debug, "successfully committed database transaction [%d -> %d]", pid, txid)
 	return nil
 }
