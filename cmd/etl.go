@@ -103,7 +103,23 @@ func runEtl(ctx context.Context, cmd *cobra.Command) error {
 	return errWait
 }
 
+func cleanupSrcSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	for _, table := range []string{"stocks", "company_profiles", "candles"} {
+		_, err := pool.Exec(ctx, fmt.Sprintf("truncate table src.%s", table))
+		if err != nil {
+			return fmt.Errorf("failed to truncate src.%s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 func startJob(ctx context.Context, pool *pgxpool.Pool) (jobRunId uint64, err error) {
+	err = cleanupSrcSchema(ctx, pool)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup src schema: %w", err)
+	}
+	util.Logf(ctx, logging.Debug, "successfully cleaned up the src schema")
+
 	var did uint64
 	row := pool.QueryRow(ctx, `SELECT id FROM metadata.job_definition WHERE name = 'Finnhub ETL'`)
 	err = row.Scan(&did)
