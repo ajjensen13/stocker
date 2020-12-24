@@ -49,6 +49,7 @@ func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff
 
 			stocks := transform.Stocks(ess)
 
+			summary := make(map[string]bool, len(ess))
 			for _, stock := range stocks {
 				ctx := util.WithLoggerValue(ctx, "symbol", stock.Symbol)
 
@@ -77,8 +78,11 @@ func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff
 				rowsModified += r.RowsAffected()
 				rowsStaged++
 
-				util.Logf(ctx, logging.Debug, "successfully staged stock: %v", stock.Symbol)
+				summary[stock.Symbol.String] = r.RowsAffected() > 0
 			}
+
+			util.Logf(util.WithLoggerValue(ctx, "stock_stage_info", summary), logging.Debug, "successfully staged stocks")
+
 			return nil
 		})
 
@@ -139,11 +143,9 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 			}
 
 			for _, candles := range tcs {
-				util.Logf(ctx, logging.Debug, "staging candles: %v", len(candles))
+				summary := map[string]int{}
 
 				for _, candle := range candles {
-					util.Logf(ctx, logging.Debug, "staging candle: %v @ %v", candle.Symbol.String, candle.Timestamp.Time.Format(time.RFC3339))
-
 					sql := `
 						INSERT INTO stage.candles
 							(job_run_id, symbol, timestamp, open, high, low, close, volume, modified, created) 
@@ -174,7 +176,11 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 
 					rowsModified += r.RowsAffected()
 					rowsStaged++
+
+					summary[candle.Symbol.String] = 1 + summary[candle.Symbol.String]
 				}
+
+				util.Logf(util.WithLoggerValue(ctx, "candle_stage_info", summary), logging.Debug, "successfully staged %d candles", len(candles))
 			}
 
 			return nil
@@ -329,13 +335,13 @@ func Candles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, symbo
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 
-			a, ac, err := calcAffected(ctx, jobRunId, tx, symbol)
+			a, ac, err := calcAffected52WkCandles(ctx, jobRunId, tx, symbol)
 			if err != nil {
 				return err
 			}
 			util.Logf(ctx, logging.Debug, "successfully calculated %d affected 52wk candles for symbol %s", ac, symbol)
 
-			r, err := updateAffected(ctx, tx, jobRunId, a)
+			r, err := updateAffected52WkCandles(ctx, tx, jobRunId, a)
 			if err != nil {
 				return err
 			}
@@ -354,60 +360,19 @@ func Candles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, symbo
 	return
 }
 
-func updateAffected(ctx context.Context, tx pgx.Tx, jobRunId uint64, affected map[string][]time.Time) (int64, error) {
+func updateAffected52WkCandles(ctx context.Context, tx pgx.Tx, jobRunId uint64, affected map[string][]time.Time) (int64, error) {
 	var rowsModified int64
 	var rowsAffected int64
 
 	for symbol, timestamps := range affected {
 		var symbolRowsModified int64
-		util.Logf(ctx, logging.Debug, "updated affected 52wk candles: %s", symbol)
-
+		ctx := util.WithLoggerValue(ctx, "symbol", symbol)
 		for _, timestamp := range timestamps {
-			util.Logf(ctx, logging.Debug, "updated affected 52wk candles: %s %v", symbol, timestamp)
-
-			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			r, err := tx.Exec(ctx, `
-				INSERT INTO stage.candles_52wk 
-					(job_run_id, symbol, timestamp, high_52wk, low_52wk, volume_52wk_avg, open, high, low, close, volume, created, modified) 
-				SELECT 
-					$1 as job_run_id, symbol, timestamp, high_52wk, low_52wk, volume_52wk_avg, open, high, low, close, volume, created, modified
-				FROM stage.calculate_candles_52wk 
-				WHERE 
-					calculate_candles_52wk.symbol = $2
-					AND calculate_candles_52wk.timestamp = $3
-				ON CONFLICT (symbol, timestamp) 
-				DO UPDATE 
-					SET 
-						job_run_id = excluded.job_run_id,
-						high_52wk = excluded.high_52wk, 
-						low_52wk = excluded.low_52wk, 
-						volume_52wk_avg = excluded.volume_52wk_avg, 
-						open = excluded.open, 
-						high = excluded.high, 
-						low = excluded.low,
-						close = excluded.close, 
-						volume = excluded.volume, 
-						modified = excluded.modified,
-						timestamp_52wk_count = excluded.timestamp_52wk_count
-					WHERE 
-						candles_52wk.high_52wk IS DISTINCT FROM excluded.high_52wk OR 
-						candles_52wk.low_52wk IS DISTINCT FROM excluded.low_52wk OR 
-						candles_52wk.volume_52wk_avg IS DISTINCT FROM excluded.volume_52wk_avg OR 
-						candles_52wk.open IS DISTINCT FROM excluded.open OR 
-						candles_52wk.high IS DISTINCT FROM excluded.high OR 
-						candles_52wk.low IS DISTINCT FROM excluded.low OR
-						candles_52wk.close IS DISTINCT FROM excluded.close OR 
-						candles_52wk.volume IS DISTINCT FROM excluded.volume OR
-						candles_52wk.timestamp_52wk_count IS DISTINCT FROM excluded.timestamp_52wk_count
-				`, jobRunId, symbol, timestamp)
-
+			modified, err := updateOneAffected52WkCandle(ctx, tx, jobRunId, symbol, timestamp)
 			if err != nil {
-				cancel()
-				return 0, fmt.Errorf("failed to update 52 week candle %v %v: %w", symbol, timestamp, err)
+				return 0, err
 			}
-
-			symbolRowsModified += r.RowsAffected()
-			cancel()
+			symbolRowsModified += modified
 		}
 
 		util.Logf(ctx, logging.Debug, fmt.Sprintf("successfully updated %d affected 52wk candles for symbol %s (%d rows modified)", len(timestamps), symbol, symbolRowsModified))
@@ -420,7 +385,53 @@ func updateAffected(ctx context.Context, tx pgx.Tx, jobRunId uint64, affected ma
 	return rowsModified, nil
 }
 
-func calcAffected(ctx context.Context, jobRunId uint64, tx pgx.Tx, symbol string) (map[string][]time.Time, int64, error) {
+func updateOneAffected52WkCandle(ctx context.Context, tx pgx.Tx, jobRunId uint64, symbol string, timestamp time.Time) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	r, err := tx.Exec(ctx, `
+		INSERT INTO stage.candles_52wk 
+			(job_run_id, symbol, timestamp, high_52wk, low_52wk, volume_52wk_avg, open, high, low, close, volume, created, modified) 
+		SELECT 
+			$1 as job_run_id, symbol, timestamp, high_52wk, low_52wk, volume_52wk_avg, open, high, low, close, volume, created, modified
+		FROM stage.calculate_candles_52wk 
+		WHERE 
+			calculate_candles_52wk.symbol = $2
+			AND calculate_candles_52wk.timestamp = $3
+		ON CONFLICT (symbol, timestamp) 
+		DO UPDATE 
+			SET 
+				job_run_id = excluded.job_run_id,
+				high_52wk = excluded.high_52wk, 
+				low_52wk = excluded.low_52wk, 
+				volume_52wk_avg = excluded.volume_52wk_avg, 
+				open = excluded.open, 
+				high = excluded.high, 
+				low = excluded.low,
+				close = excluded.close, 
+				volume = excluded.volume, 
+				modified = excluded.modified,
+				timestamp_52wk_count = excluded.timestamp_52wk_count
+			WHERE 
+				candles_52wk.high_52wk IS DISTINCT FROM excluded.high_52wk OR 
+				candles_52wk.low_52wk IS DISTINCT FROM excluded.low_52wk OR 
+				candles_52wk.volume_52wk_avg IS DISTINCT FROM excluded.volume_52wk_avg OR 
+				candles_52wk.open IS DISTINCT FROM excluded.open OR 
+				candles_52wk.high IS DISTINCT FROM excluded.high OR 
+				candles_52wk.low IS DISTINCT FROM excluded.low OR
+				candles_52wk.close IS DISTINCT FROM excluded.close OR 
+				candles_52wk.volume IS DISTINCT FROM excluded.volume OR
+				candles_52wk.timestamp_52wk_count IS DISTINCT FROM excluded.timestamp_52wk_count
+		`, jobRunId, symbol, timestamp)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to update 52 week candle %v %v: %w", symbol, timestamp, err)
+	}
+
+	return r.RowsAffected(), nil
+}
+
+func calcAffected52WkCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx, symbol string) (map[string][]time.Time, int64, error) {
 	var rowsAffected int64
 	rs, err := tx.Query(ctx, `
 		SELECT

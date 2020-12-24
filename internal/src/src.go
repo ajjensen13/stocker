@@ -38,8 +38,6 @@ func InsertStocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, ss [
 
 		return util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 			for _, stock := range ss {
-				ctx := util.WithLoggerValue(ctx, "symbol", stock.Symbol)
-
 				if stock.Symbol == "" {
 					util.Logf(ctx, logging.Debug, "skipping stock due to missing symbol: %v", stock)
 					continue
@@ -48,9 +46,8 @@ func InsertStocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, ss [
 				if err != nil {
 					return fmt.Errorf("failed to load stock symbol %q: %w", stock.Symbol, err)
 				}
-
-				util.Logf(ctx, logging.Debug, "successfully inserted stock %q into src.stocks", stock.Symbol)
 			}
+			util.Logf(ctx, logging.Debug, "successfully inserted %d stocks into src.stocks", len(ss))
 			return nil
 		})
 	}, bo, bon)
