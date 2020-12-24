@@ -304,6 +304,7 @@ func querySrcCompanyProfiles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (r
 
 func Candles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, symbol string, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
+
 	err = backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()

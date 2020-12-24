@@ -177,6 +177,8 @@ func processStocks(ctx context.Context, cmd *cobra.Command, jobRunId uint64, poo
 }
 
 func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
+	ctx = util.WithLoggerValue(ctx, "type", "company_profile")
+
 	success := 0
 	for _, es := range ess {
 		select {
@@ -216,6 +218,8 @@ func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.
 }
 
 func processCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
+	ctx = util.WithLoggerValue(ctx, "type", "candle")
+
 	latest, err := queryMostRecentCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool)
 	if err != nil {
 		return fmt.Errorf("failed to get latest stocks: %w", err)
@@ -245,6 +249,7 @@ func processCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, es
 			}
 			util.Logf(ctx, logging.Info, "successfully staged %d candles for symbol %s", si.RowsStaged, es.Symbol)
 
+			var ctx = util.WithLoggerValue(ctx, "type", "52wk_candle")
 			si, err = stage52WkCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, es.Symbol)
 			if err != nil {
 				return fmt.Errorf("failed to stage 52wk candles: %w", err)

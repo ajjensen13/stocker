@@ -18,7 +18,7 @@ func RunTx(ctx context.Context, pool *pgxpool.Pool, f func(ctx context.Context, 
 	}
 
 	pid := conn.Conn().PgConn().PID()
-	ctx = WithLoggerValue(ctx, "db_conn_pid", pid)
+	ctx = WithLoggerValue(ctx, "db_conn_pid", fmt.Sprintf("pid_%d", pid))
 	Logf(ctx, logging.Debug, "acquired database connection [%d]", pid)
 
 	defer func() {
@@ -27,7 +27,7 @@ func RunTx(ctx context.Context, pool *pgxpool.Pool, f func(ctx context.Context, 
 	}()
 
 	txid := atomic.AddUint32(&nextTxId, 1)
-	ctx = WithLoggerValue(ctx, "db_conn_tx_id", txid)
+	ctx = WithLoggerValue(ctx, "db_conn_tx_id", fmt.Sprintf("tx_%d", txid))
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create transaction [%d/%d]: %w", pid, txid, err)
