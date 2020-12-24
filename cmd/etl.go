@@ -74,6 +74,8 @@ func runEtl(ctx context.Context, cmd *cobra.Command) error {
 		return err
 	}
 
+	ctx = util.WithLoggerValue(ctx, "job_run_id", fmt.Sprintf("job_run_%d", jobRunId))
+
 	throttler := time.NewTicker(time.Second)
 	defer throttler.Stop()
 
