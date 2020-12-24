@@ -17,11 +17,11 @@ require (
 	github.com/jackc/pgx/v4 v4.10.1
 	github.com/lib/pq v1.9.0 // indirect
 	github.com/spf13/cobra v1.1.1
-	golang.org/x/crypto v0.0.0-20201217014255-9d1352758620 // indirect
-	golang.org/x/net v0.0.0-20201216054612-986b41b23924 // indirect
+	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
+	golang.org/x/net v0.0.0-20201224014010-6772e930b67b // indirect
 	golang.org/x/sync v0.0.0-20201207232520-09787c993a3a
-	golang.org/x/sys v0.0.0-20201218084310-7d0127a74742 // indirect
-	golang.org/x/tools v0.0.0-20201218024724-ae774e9781d2 // indirect
+	golang.org/x/sys v0.0.0-20201223074533-0d417f636930 // indirect
+	golang.org/x/tools v0.0.0-20201224043029-2b0845dc783e // indirect
 	google.golang.org/genproto v0.0.0-20201214200347-8c77b98c765d // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
