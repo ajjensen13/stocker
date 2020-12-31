@@ -1,20 +1,17 @@
+create role stocker_ro;
+
 create schema if not exists metadata;
 alter schema metadata owner to stocker;
-alter default privileges in schema metadata grant select on tables to stocker_metadata_ro;
-alter default privileges in schema metadata grant all on tables to stocker_metadata_rw;
+alter default privileges in schema metadata grant select on tables to stocker_ro;
 create schema if not exists src;
 alter schema src owner to stocker;
-alter default privileges in schema src grant select on tables to stocker_src_ro;
-alter default privileges in schema src grant all on tables to stocker_src_rw;
+alter default privileges in schema src grant select on tables to stocker_ro;
 create schema if not exists stage;
 alter schema stage owner to stocker;
-alter default privileges in schema stage grant select on tables to stocker_stage_ro;
-alter default privileges in schema stage grant all on tables to stocker_stage_rw;
+alter default privileges in schema stage grant select on tables to stocker_ro;
 create schema if not exists report;
 alter schema report owner to stocker;
-alter default privileges in schema report grant select on tables to stocker_report_ro;
-alter default privileges in schema report grant all on tables to stocker_report_rw;
-
+alter default privileges in schema report grant select on tables to stocker_ro;
 
 create table if not exists metadata.job_definition
 (
@@ -24,15 +21,15 @@ create table if not exists metadata.job_definition
         primary key (id)
 );
 
-comment on table metadata.job_definition is 'represents a type of job that can be run periodically';
+comment on table metadata.job_definition is 'Represents a type of job that can be run periodically';
 
 create table if not exists metadata.job_run
 (
+    job_definition_id bigint,
     id                bigserial                                          not null,
     created           timestamp with time zone default current_timestamp not null,
     modified          timestamp with time zone default current_timestamp not null,
     success           boolean,
-    job_definition_id bigint,
     constraint job_run_pk
         primary key (id),
     constraint job_run_job_definition_id_fk
@@ -42,8 +39,8 @@ create table if not exists metadata.job_run
 
 create table if not exists src.stocks
 (
-    symbol     text   not null,
     job_run_id bigint,
+    symbol     text   not null,
     data       jsonb,
     constraint stocks_pk
         primary key (job_run_id, symbol),
@@ -56,10 +53,10 @@ comment on table src.stocks is 'Contains information about stocks as provided by
 
 create table if not exists src.candles
 (
-    symbol      text                      not null,
-    "from"        timestamp with time zone  not null,
-    "to"          timestamp with time zone  not null,
     job_run_id bigint,
+    symbol     text                      not null,
+    "from"     timestamp with time zone  not null,
+    "to"       timestamp with time zone  not null,
     data       jsonb,
     constraint candles_pk
         primary key (job_run_id, symbol),
@@ -72,11 +69,11 @@ comment on table src.candles is 'Contains daily stock candles as far back as pro
 
 create table if not exists src.company_profiles
 (
-    ticker     text   not null,
     job_run_id bigint,
+    symbol     text   not null,
     data       jsonb,
     constraint company_profiles_pk
-        primary key (job_run_id, ticker),
+        primary key (job_run_id, symbol),
     constraint job_run_id_fk
         foreign key (job_run_id) references metadata.job_run
             on delete set null
@@ -86,12 +83,12 @@ comment on table src.company_profiles is 'Contains company profiles as provided 
 
 create table if not exists stage.stocks
 (
+    job_run_id     bigint,
     symbol         text                     not null,
     display_symbol text default ''::text    not null,
     description    text                     not null,
     created        timestamp with time zone not null,
     modified       timestamp with time zone not null,
-    job_run_id     bigint,
     constraint stocks_pk
         primary key (symbol),
     constraint job_run_id_fk
@@ -103,6 +100,7 @@ comment on table stage.stocks is 'Contains staged information about stocks';
 
 create table if not exists stage.candles
 (
+    job_run_id bigint,
     symbol     text                     not null,
     timestamp  timestamp with time zone not null,
     open       real,
@@ -112,7 +110,6 @@ create table if not exists stage.candles
     volume     real,
     created    timestamp with time zone not null,
     modified   timestamp with time zone not null,
-    job_run_id bigint,
     constraint candles_pk
         primary key (symbol, timestamp),
     constraint candles_stocks_symbol_fk
@@ -129,6 +126,7 @@ create index if not exists ndx_candles_modified
 
 create table if not exists stage.company_profiles
 (
+    job_run_id            bigint,
     country               text                     not null,
     currency              text                     not null,
     exchange              text                     not null,
@@ -143,10 +141,9 @@ create table if not exists stage.company_profiles
     industry              text                     not null,
     created               timestamp with time zone not null,
     modified              timestamp with time zone not null,
-    job_run_id            bigint,
     constraint company_profiles_pk
         primary key (symbol),
-    constraint company_profiles_stocks_symbol_fk
+    constraint stocks_symbol_fk
         foreign key (symbol) references stage.stocks,
     constraint job_run_id_fk
         foreign key (job_run_id) references metadata.job_run
@@ -157,6 +154,7 @@ comment on table stage.company_profiles is 'Contains staged company profiles';
 
 create table if not exists stage.candles_52wk
 (
+    job_run_id           bigint,
     symbol               text                     not null,
     timestamp            timestamp with time zone not null,
     high_52wk            real,
@@ -170,12 +168,11 @@ create table if not exists stage.candles_52wk
     created              timestamp with time zone,
     modified             timestamp with time zone,
     timestamp_52wk_count integer,
-    job_run_id            bigint,
-    constraint stage_candles_pk
+    constraint candles_52wk_pk
         primary key (symbol, timestamp),
     constraint candles_stocks_symbol_fk
         foreign key (symbol) references stage.stocks,
-    constraint candles_52wk_candles_symbol_timestamp_fk
+    constraint candles_symbol_timestamp_fk
         foreign key (symbol, timestamp) references stage.candles
 );
 
@@ -229,41 +226,41 @@ select company_profiles.country,
 from stage.company_profiles;
 
 
-create or replace view report.candles_52wk (symbol,
-                                            timestamp,
-                                            high_52wk,
-                                            low_52wk,
-                                            volume_52wk_avg,
-                                            open,
-                                            high,
-                                            low,
-                                            close,
-                                            volume,
-                                            created,
-                                            modified,
-                                            timestamp_52wk_count)
-as
-select symbol,
-       timestamp,
-       high_52wk,
-       low_52wk,
-       volume_52wk_avg,
-       open,
-       high,
-       low,
-       close,
-       volume,
-       created,
-       modified,
-       timestamp_52wk_count,
-       job_run_id
+create or replace view report.candles_52wk (
+    symbol,
+    timestamp,
+    high_52wk,
+    low_52wk,
+    volume_52wk_avg,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    created,
+    modified,
+    timestamp_52wk_count
+) as select
+    symbol,
+    timestamp,
+    high_52wk,
+    low_52wk,
+    volume_52wk_avg,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    created,
+    modified,
+    timestamp_52wk_count,
+    job_run_id
 from stage.candles_52wk;
 
 comment on view report.company_profiles is 'Exposes company profile data for reporting';
 
 create or replace view stage.calculate_candles_52wk
-            (symbol, timestamp, open, high, low, close, volume, created, modified, high_52wk, low_52wk, volume_52wk_avg,
-             timestamp_52wk_count)
+(symbol, timestamp, open, high, low, close, volume, created, modified, high_52wk, low_52wk, volume_52wk_avg, timestamp_52wk_count)
 as
 select anchor.symbol,
        anchor.timestamp,
@@ -274,12 +271,11 @@ select anchor.symbol,
        anchor.volume,
        anchor.created,
        anchor.modified,
-       max(lag.high)          as high_52wk,
-       min(lag.low)           as low_52wk,
-       avg(lag.volume)        as volume_52wk_avg,
+       max(lag.high)        as high_52wk,
+       min(lag.low)         as low_52wk,
+       avg(lag.volume)      as volume_52wk_avg,
        count(lag.timestamp) as timestamp_52wk_count
-from stage.candles anchor
-    join stage.candles lag on anchor.symbol = lag.symbol
+from stage.candles anchor join stage.candles lag on anchor.symbol = lag.symbol
 where lag."timestamp" between anchor.timestamp - interval '52 weeks' and anchor.timestamp
 group by anchor.symbol,
          anchor.timestamp,
@@ -291,3 +287,4 @@ group by anchor.symbol,
          anchor.created,
          anchor.modified;
 
+insert into metadata.job_definition (name) values ('Finnhub ETL');

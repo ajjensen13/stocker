@@ -20,7 +20,7 @@ import (
 	"cloud.google.com/go/logging"
 	"context"
 	"fmt"
-	"github.com/Finnhub-Stock-API/finnhub-go"
+	"github.com/ajjensen13/stocker/internal/api"
 	"github.com/ajjensen13/stocker/internal/util"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -76,22 +76,19 @@ func runEtl(ctx context.Context, cmd *cobra.Command) error {
 
 	ctx = util.WithLoggerValue(ctx, "job_run_id", fmt.Sprintf("job_run_%d", jobRunId))
 
-	throttler := time.NewTicker(time.Second)
-	defer throttler.Stop()
-
 	grp, grpCtx := errgroup.WithContext(ctx)
 	grp.Go(func() error {
-		ess, err := processStocks(grpCtx, cmd, jobRunId, pool, throttler)
+		ess, err := processStocks(grpCtx, jobRunId, pool)
 		if err != nil {
 			return err
 		}
 
 		grp.Go(func() error {
-			return processCandles(grpCtx, jobRunId, pool, append([]finnhub.Stock{}, ess...), throttler)
+			return processCandles(grpCtx, jobRunId, pool, ess)
 		})
 
 		grp.Go(func() error {
-			return processCompanyProfiles(grpCtx, jobRunId, pool, append([]finnhub.Stock{}, ess...), throttler)
+			return processCompanyProfiles(grpCtx, jobRunId, pool, ess)
 		})
 
 		return nil
@@ -147,70 +144,64 @@ func endJob(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, success bo
 	return nil
 }
 
-func processStocks(ctx context.Context, cmd *cobra.Command, jobRunId uint64, pool *pgxpool.Pool, throttler *time.Ticker) ([]finnhub.Stock, error) {
+func processStocks(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool) (api.StocksResponse, error) {
 	ctx = util.WithLoggerValue(ctx, "action", "process")
 	ctx = util.WithLoggerValue(ctx, "type", "stock")
 
-	<-throttler.C
-	ess, err := retrieveSrcStocks(backoffContext(ctx, 5*time.Minute))
+	stocks, err := requestStocks(backoffContext(ctx, 5*time.Minute))
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)
+		return api.StocksResponse{}, fmt.Errorf("failed to retrieve stocks from finnhub: %w", err)
 	}
-	util.Logf(ctx, logging.Info, "successfully received %d stocks from finnhub", len(ess))
+	util.Logf(ctx, logging.Info, "successfully received %d stocks from finnhub", len(stocks.Response))
 
-	ess, err = skipAndLimit(cmd, ess)
+	err = saveStocks(backoffContext(ctx, 5*time.Minute), jobRunId, pool, stocks)
 	if err != nil {
-		return nil, fmt.Errorf("failed to reduce result set using skip and limit: %w", err)
+		return api.StocksResponse{}, fmt.Errorf("failed to load stocks into database: %w", err)
 	}
+	util.Logf(ctx, logging.Info, "successfully loaded %d stocks into src schema", len(stocks.Response))
 
-	err = insertSrcStocks(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ess)
+	info, err := stageStocks(backoffContext(ctx, 5*time.Minute), jobRunId, pool)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load stocks into database: %w", err)
+		return api.StocksResponse{}, fmt.Errorf("failed to stage stocks: %w", err)
 	}
-	util.Logf(ctx, logging.Info, "successfully loaded %d stocks into src schema", len(ess))
+	util.Logf(ctx, logging.Info, "successfully staged %d stocks into stage schema (%d rows modified)", info.RowsStaged, info.RowsModified)
 
-	si, err := stageStocks(backoffContext(ctx, 5*time.Minute), jobRunId, pool)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stage stocks: %w", err)
-	}
-	util.Logf(ctx, logging.Info, "successfully staged %d stocks into stage schema (%d rows modified)", si.RowsStaged, si.RowsModified)
-
-	return ess, nil
+	return stocks, nil
 }
 
-func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
+func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, stocks api.StocksResponse) error {
 	ctx = util.WithLoggerValue(ctx, "type", "company_profile")
 
 	success := 0
-	for _, es := range ess {
-		ctx := util.WithLoggerValue(ctx, "symbol", es.Symbol)
+	for _, stock := range stocks.Response {
+		ctx := util.WithLoggerValue(ctx, "symbol", stock.Symbol)
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("aborting company profile request %q from finnhub: %w", es.Symbol, ctx.Err())
-		case <-throttler.C:
-			ecp, err := retrieveCompanyProfile(backoffContext(ctx, 5*time.Minute), es)
+			return fmt.Errorf("aborting company profile request %q from finnhub: %w", stock.Symbol, ctx.Err())
+		default:
+			profile, err := requestCompanyProfile(backoffContext(ctx, 5*time.Minute), api.Symbol(stock.Symbol))
 			if err != nil {
-				util.Logf(ctx, logging.Warning, "failed to retrieve company profile %q from finnhub: %v", es.Symbol, err)
+				util.Logf(ctx, logging.Warning, "failed to retrieve company profile %q from finnhub: %v", stock.Symbol, err)
 				continue
 			}
-			util.Logf(ctx, logging.Debug, "successfully retrieved %q company profile from finnhub", es.Symbol)
+			util.Logf(ctx, logging.Debug, "successfully retrieved %q company profile from finnhub", stock.Symbol)
 
-			if ecp.Ticker == "" {
-				util.Logf(ctx, logging.Debug, "company profile %q will be skipped due to missing ticker", es.Symbol)
+			if profile.Response.Ticker == "" {
+				util.Logf(ctx, logging.Debug, "company profile %q will be skipped due to missing ticker", stock.Symbol)
 				continue
 			}
 
-			err = insertSrcCompanyProfile(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ecp)
+			err = saveCompanyProfile(backoffContext(ctx, 5*time.Minute), jobRunId, pool, profile)
 			if err != nil {
-				return fmt.Errorf("failed to load company profile %q into database: %w", es.Symbol, err)
+				return fmt.Errorf("failed to load company profile %q into database: %w", stock.Symbol, err)
 			}
-			util.Logf(ctx, logging.Debug, "successfully loaded %q company profile into src schema", es.Symbol)
+			util.Logf(ctx, logging.Debug, "successfully loaded %q company profile into src schema", stock.Symbol)
 
 			success++
 		}
 	}
-	util.Logf(ctx, logging.Info, "successfully loaded %d of %d company profiles into src schema", success, len(ess))
+	util.Logf(ctx, logging.Info, "successfully loaded %d of %d company profiles into src schema", success, len(stocks.Response))
 
 	si, err := stageCompanyProfiles(backoffContext(ctx, 5*time.Minute), jobRunId, pool)
 	if err != nil {
@@ -221,7 +212,7 @@ func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.
 	return nil
 }
 
-func processCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, ess []finnhub.Stock, throttler *time.Ticker) error {
+func processCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, stocks api.StocksResponse) error {
 	ctx = util.WithLoggerValue(ctx, "type", "candle")
 
 	latest, err := queryMostRecentCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool)
@@ -230,37 +221,37 @@ func processCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, es
 	}
 	util.Logf(ctx, logging.Info, "extracted %d existing candles from database", len(latest))
 
-	for _, es := range ess {
-		ctx := util.WithLoggerValue(ctx, "symbol", es.Symbol)
+	for _, stock := range stocks.Response {
+		ctx := util.WithLoggerValue(ctx, "symbol", stock.Symbol)
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("aborting candle request %q from finnhub: %w", es.Symbol, ctx.Err())
-		case <-throttler.C:
-			ec, err := retrieveSrcCandles(backoffContext(ctx, 5*time.Minute), es, latest)
+			return fmt.Errorf("aborting candle request %q from finnhub: %w", stock.Symbol, ctx.Err())
+		default:
+			candles, err := requestCandles(backoffContext(ctx, 5*time.Minute), api.Symbol(stock.Symbol), latest)
 			if err != nil {
-				util.Logf(ctx, logging.Error, "failed to retrieve stock candles %q from finnhub: %v", es.Symbol, err)
+				util.Logf(ctx, logging.Error, "failed to retrieve stock candles %q from finnhub: %v", stock.Symbol, err)
 				continue
 			}
 
-			err = insertSrcCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, ec)
+			err = saveCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, candles)
 			if err != nil {
-				return fmt.Errorf("failed to load stock candles %q into database: %w", es.Symbol, err)
+				return fmt.Errorf("failed to load stock candles %q into database: %w", stock.Symbol, err)
 			}
-			util.Logf(ctx, logging.Info, "requested & loaded %d stock candles from finnhub into database: %s", len(ec.StockCandles.T), es.Symbol)
+			util.Logf(ctx, logging.Info, "requested & loaded %d stock candles from finnhub into database: %s", len(candles.Response.T), stock.Symbol)
 
-			si, err := stageCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, es.Symbol)
+			info, err := stageCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, candles)
 			if err != nil {
-				return fmt.Errorf("failed to stage candles for symbol %s: %w", es.Symbol, err)
+				return fmt.Errorf("failed to stage candles for symbol %s: %w", stock.Symbol, err)
 			}
-			util.Logf(ctx, logging.Info, "successfully staged %d candles for symbol %s", si.RowsStaged, es.Symbol)
+			util.Logf(ctx, logging.Info, "successfully staged %d candles for symbol %s", info.RowsStaged, stock.Symbol)
 
 			var ctx = util.WithLoggerValue(ctx, "type", "52wk_candle")
-			si, err = stage52WkCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, es.Symbol)
+			info, err = stage52WkCandles(backoffContext(ctx, 5*time.Minute), jobRunId, pool, candles)
 			if err != nil {
 				return fmt.Errorf("failed to stage 52wk candles: %w", err)
 			}
-			util.Logf(ctx, logging.Info, "successfully staged %d 52wk candles (%d rows modified)", si.RowsStaged, si.RowsModified)
+			util.Logf(ctx, logging.Info, "successfully staged %d 52wk candles (%d rows modified)", info.RowsStaged, info.RowsModified)
 		}
 	}
 	return nil
@@ -297,37 +288,6 @@ type dbConnPoolConfig struct {
 	MaxConns          int    `json:"maxConns"`
 }
 
-func skipAndLimit(cmd *cobra.Command, ess []finnhub.Stock) ([]finnhub.Stock, error) {
-	reqS, err := cmd.Flags().GetInt("skip")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get skip flag: %w", err)
-	}
-	var actS = 0
-	if reqS > -1 {
-		actS = reqS
-		maxS := len(ess)
-		if reqS > maxS {
-			actS = reqS
-		}
-		ess = ess[actS:]
-	}
-
-	reqL, err := cmd.Flags().GetInt("limit")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get limit flag: %w", err)
-	}
-	var actL = 0
-	if reqL > -1 {
-		actL = reqL
-		maxL := len(ess)
-		if reqL > maxL {
-			actL = reqL
-		}
-		ess = ess[:actL]
-	}
-	return ess, nil
-}
-
 func init() {
 	rootCmd.AddCommand(etlCmd)
 	etlCmd.Flags().IntP("skip", "s", -1, "number of stocks to skip")
@@ -340,18 +300,5 @@ func backoffContext(ctx context.Context, maxElapsedTime time.Duration) backoff.B
 	result.MaxElapsedTime = maxElapsedTime
 	return backoff.WithContext(result, ctx)
 }
-
-type latestStock struct {
-	symbol    string
-	timestamp time.Time
-}
-
-type candleConfig struct {
-	resolution Resolution
-	startDate  time.Time
-	endDate    time.Time
-}
-
-type latestStocks map[string]time.Time
 
 type apiAuthContext context.Context

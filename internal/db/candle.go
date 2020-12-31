@@ -15,24 +15,196 @@ You should have received a copy of the GNU General Public License
 along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
-package stage
+package db
 
 import (
 	"cloud.google.com/go/logging"
 	"context"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
-	"github.com/ajjensen13/stocker/internal/external"
+	"github.com/ajjensen13/stocker/internal/api"
+	"github.com/ajjensen13/stocker/internal/util"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"time"
-
-	"github.com/ajjensen13/stocker/internal/transform"
-	"github.com/ajjensen13/stocker/internal/util"
 )
 
-func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+type Candle struct {
+	Symbol    pgtype.Text
+	Timestamp pgtype.Timestamptz
+	Open      pgtype.Float4
+	High      pgtype.Float4
+	Low       pgtype.Float4
+	Close     pgtype.Float4
+	Volume    pgtype.Float4
+}
+
+type CompanyProfile struct {
+	Country              pgtype.Text
+	Currency             pgtype.Text
+	Exchange             pgtype.Text
+	Name                 pgtype.Text
+	Symbol               pgtype.Text
+	Ipo                  pgtype.Date
+	MarketCapitalization pgtype.Float4
+	SharesOutstanding    pgtype.Float4
+	Logo                 pgtype.Text
+	Phone                pgtype.Text
+	WebUrl               pgtype.Text
+	Industry             pgtype.Text
+}
+
+type Stock struct {
+	Symbol        pgtype.Text
+	DisplaySymbol pgtype.Text
+	Description   pgtype.Text
+}
+
+func TransformStocks(in []finnhub.Stock) (out []Stock) {
+	out = make([]Stock, len(in))
+	for i, es := range in {
+		out[i] = TransformStock(es)
+	}
+	return out
+}
+
+func TransformStock(s finnhub.Stock) (out Stock) {
+	_ = out.Symbol.Set(s.Symbol)
+	_ = out.DisplaySymbol.Set(s.DisplaySymbol)
+	_ = out.Description.Set(s.Description)
+	return
+}
+
+func TransformStockCandles(in []api.CandlesResponse, tz *time.Location) (out [][]Candle, err error) {
+	ret := make([][]Candle, len(in))
+	for i, candle := range in {
+		c, err := TransformCandles(candle.Request.Symbol, candle.Response, tz)
+		if err != nil {
+			return nil, fmt.Errorf("failed to transform %s stock candles: %w", candle.Request.Symbol, err)
+		}
+		ret[i] = c
+	}
+	return ret, nil
+}
+
+func TransformCandles(symbol api.Symbol, in finnhub.StockCandles, tz *time.Location) (out []Candle, err error) {
+	l := len(in.T)
+	switch {
+	case l == 0:
+		return nil, nil
+	case len(in.O) != l:
+		return nil, fmt.Errorf("len(open) = %d, len(timestamp) = %d for stock %q", len(in.O), l, symbol)
+	case len(in.H) != l:
+		return nil, fmt.Errorf("len(high) = %d, len(timestamp) = %d for stock %q", len(in.H), l, symbol)
+	case len(in.L) != l:
+		return nil, fmt.Errorf("len(low) = %d, len(timestamp) = %d for stock %q", len(in.L), l, symbol)
+	case len(in.C) != l:
+		return nil, fmt.Errorf("len(close) = %d, len(timestamp) = %d for stock %q", len(in.C), l, symbol)
+	case len(in.V) != l:
+		return nil, fmt.Errorf("len(volume) = %d, len(timestamp) = %d for stock %q", len(in.V), l, symbol)
+	}
+
+	out = make([]Candle, l)
+	for ndx, ts := range in.T {
+		_ = out[ndx].Symbol.Set(string(symbol))
+		_ = out[ndx].Timestamp.Set(time.Unix(ts, 0).In(tz))
+		_ = out[ndx].Open.Set(in.O[ndx])
+		_ = out[ndx].High.Set(in.H[ndx])
+		_ = out[ndx].Low.Set(in.L[ndx])
+		_ = out[ndx].Close.Set(in.C[ndx])
+		_ = out[ndx].Volume.Set(in.V[ndx])
+	}
+
+	return out, nil
+}
+
+func TransformCompanyProfiles(in []finnhub.CompanyProfile2) (out []CompanyProfile) {
+	out = make([]CompanyProfile, len(in))
+	for i, icp := range in {
+		p := TransformCompanyProfile(icp)
+		out[i] = p
+	}
+	return out
+}
+
+func TransformCompanyProfile(in finnhub.CompanyProfile2) (out CompanyProfile) {
+	_ = out.Country.Set(in.Country)
+	_ = out.Currency.Set(in.Currency)
+	_ = out.Exchange.Set(in.Exchange)
+	_ = out.Name.Set(in.Name)
+	_ = out.Symbol.Set(in.Ticker)
+	_ = out.Ipo.Set(in.Ipo)
+	_ = out.MarketCapitalization.Set(in.MarketCapitalization)
+	_ = out.SharesOutstanding.Set(in.ShareOutstanding)
+	_ = out.Logo.Set(in.Logo)
+	_ = out.Phone.Set(in.Phone)
+	_ = out.WebUrl.Set(in.Weburl)
+	_ = out.Industry.Set(in.FinnhubIndustry)
+	return
+}
+
+func SaveStocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff.BackOff, bon backoff.Notify, stocks api.StocksResponse) error {
+	ctx = util.WithLoggerValue(ctx, "action", "load")
+	return backoff.RetryNotify(func() (err error) {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+
+		return util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+			success := 0
+
+			for _, stock := range stocks.Response {
+				if stock.Symbol == "" {
+					util.Logf(ctx, logging.Debug, "skipping stock due to missing symbol: %v", stock)
+					continue
+				}
+				_, err := tx.Exec(ctx, `INSERT INTO src.stocks (job_run_id, symbol, data) VALUES ($1, $2, $3)`, jobRunId, stock.Symbol, stock)
+				if err != nil {
+					return fmt.Errorf("failed to load stock symbol %q: %w", stock.Symbol, err)
+				}
+				success++
+			}
+
+			util.Logf(ctx, logging.Debug, "successfully inserted %d of %d stocks into src.stocks", success, len(stocks.Response))
+			return nil
+		})
+	}, bo, bon)
+}
+
+func SaveCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, candles api.CandlesResponse) error {
+	ctx = util.WithLoggerValue(ctx, "action", "load")
+	return backoff.RetryNotify(func() (err error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		return util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+			_, err = tx.Exec(ctx, `INSERT INTO src.candles (job_run_id, symbol, "from", "to", data) VALUES ($1, $2, $3, $4, $5)`, jobRunId, candles.Request.Symbol, candles.Request.From, candles.Request.To, candles.Response)
+			if err != nil {
+				return fmt.Errorf("failed to load stock symbol %q: %w", candles.Request.Symbol, err)
+			}
+			return nil
+		})
+	}, bo, bon)
+}
+
+func SaveCompanyProfile(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, profiles api.CompanyProfileResponse) error {
+	ctx = util.WithLoggerValue(ctx, "action", "load")
+	return backoff.RetryNotify(func() (err error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		return util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+			_, err = tx.Exec(ctx, `INSERT INTO src.company_profiles (job_run_id, symbol, data) VALUES ($1, $2, $3)`, jobRunId, profiles.Request.Symbol, profiles.Response)
+			if err != nil {
+				return fmt.Errorf("failed to load company profile %q: %w", profiles.Request.Symbol, err)
+			}
+			return nil
+		})
+	}, bo, bon)
+}
+
+func StageStocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
 
 	err = backoff.RetryNotify(func() error {
@@ -42,14 +214,14 @@ func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff
 		defer cancel()
 
 		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
-			ess, err := querySrcStocks(ctx, jobRunId, tx)
+			srcStocks, err := lookupStocksToStage(ctx, jobRunId, tx)
 			if err != nil {
 				return err
 			}
 
-			stocks := transform.Stocks(ess)
+			stocks := TransformStocks(srcStocks)
 
-			summary := make(map[string]bool, len(ess))
+			summary := make(map[string]bool, len(stocks))
 			for _, stock := range stocks {
 				ctx := util.WithLoggerValue(ctx, "symbol", stock.Symbol)
 
@@ -97,7 +269,7 @@ func Stocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo backoff
 	return
 }
 
-func querySrcStocks(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finnhub.Stock, err error) {
+func lookupStocksToStage(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finnhub.Stock, err error) {
 	rows, err := tx.Query(ctx, `SELECT data FROM src.stocks WHERE job_run_id = $1`, jobRunId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source stocks: %w", err)
@@ -116,17 +288,17 @@ func querySrcStocks(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finn
 	return ret, nil
 }
 
-func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, tz *time.Location) (ret StagingInfo, err error) {
+func StageCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, tz *time.Location) (ret StagingInfo, err error) {
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
-		var ecs []external.StockCandlesWithMetadata
+		var srcCandles []api.CandlesResponse
 
 		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) (err error) {
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
-			ecs, err = querySrcCandles(ctx, jobRunId, tx)
+			srcCandles, err = lookupCandlesToStage(ctx, jobRunId, tx)
 			return err
 		})
 		if err != nil {
@@ -137,15 +309,15 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 
-			tcs, err := transform.StockCandles(ecs, tz)
+			candles, err := TransformStockCandles(srcCandles, tz)
 			if err != nil {
 				return err
 			}
 
-			for _, candles := range tcs {
+			for _, stockCandles := range candles {
 				summary := map[string]int{}
 
-				for _, candle := range candles {
+				for _, stockCandle := range stockCandles {
 					sql := `
 						INSERT INTO stage.candles
 							(job_run_id, symbol, timestamp, open, high, low, close, volume, modified, created) 
@@ -169,7 +341,7 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 								candles.close IS DISTINCT FROM excluded.close OR
 								candles.volume IS DISTINCT FROM excluded.volume`
 
-					r, err := tx.Exec(ctx, sql, jobRunId, candle.Symbol, candle.Timestamp, candle.Open, candle.High, candle.Low, candle.Close, candle.Volume)
+					r, err := tx.Exec(ctx, sql, jobRunId, stockCandle.Symbol, stockCandle.Timestamp, stockCandle.Open, stockCandle.High, stockCandle.Low, stockCandle.Close, stockCandle.Volume)
 					if err != nil {
 						return fmt.Errorf("error while staging candles: %w", err)
 					}
@@ -177,7 +349,7 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 					rowsModified += r.RowsAffected()
 					rowsStaged++
 
-					summary[candle.Symbol.String] = 1 + summary[candle.Symbol.String]
+					summary[stockCandle.Symbol.String] = 1 + summary[stockCandle.Symbol.String]
 				}
 
 				util.Logf(util.WithLoggerValue(ctx, "candle_stage_info", summary), logging.Debug, "successfully staged %d candles", len(candles))
@@ -197,7 +369,7 @@ func Candles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backof
 	return
 }
 
-func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []external.StockCandlesWithMetadata, err error) {
+func lookupCandlesToStage(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []api.CandlesResponse, err error) {
 	rows, err := tx.Query(ctx, `SELECT symbol, data FROM src.candles WHERE job_run_id = $1`, jobRunId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source candles: %w", err)
@@ -205,8 +377,8 @@ func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []ext
 	defer rows.Close()
 
 	for rows.Next() {
-		var d external.StockCandlesWithMetadata
-		err := rows.Scan(&d.Symbol, &d.StockCandles)
+		var d api.CandlesResponse
+		err := rows.Scan(&d.Request.Symbol, &d.Response)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan source candles: %w", err)
 		}
@@ -216,18 +388,18 @@ func querySrcCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []ext
 	return ret, nil
 }
 
-func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
 
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
-		var profiles []finnhub.CompanyProfile2
+		var srcProfiles []finnhub.CompanyProfile2
 
 		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) (err error) {
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
-			profiles, err = querySrcCompanyProfiles(ctx, jobRunId, tx)
+			srcProfiles, err = lookupCompanyProfilesToStage(ctx, jobRunId, tx)
 			return err
 		})
 		if err != nil {
@@ -238,12 +410,9 @@ func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, b
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 
-			tcps, err := transform.CompanyProfiles(profiles)
-			if err != nil {
-				return err
-			}
+			profiles := TransformCompanyProfiles(srcProfiles)
 
-			for _, tcp := range tcps {
+			for _, tcp := range profiles {
 				ctx := util.WithLoggerValue(ctx, "symbol", tcp.Symbol)
 				sql := `
 					INSERT INTO stage.company_profiles
@@ -306,7 +475,7 @@ func CompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, b
 	return
 }
 
-func querySrcCompanyProfiles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finnhub.CompanyProfile2, err error) {
+func lookupCompanyProfilesToStage(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finnhub.CompanyProfile2, err error) {
 	ret = make([]finnhub.CompanyProfile2, 0, 50_000)
 
 	rows, err := tx.Query(ctx, `SELECT data FROM src.company_profiles WHERE job_run_id = $1`, jobRunId)
@@ -327,7 +496,7 @@ func querySrcCompanyProfiles(ctx context.Context, jobRunId uint64, tx pgx.Tx) (r
 	return ret, nil
 }
 
-func Candles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, symbol string, bo backoff.BackOff, bon backoff.Notify) (ret StagingInfo, err error) {
+func StageCandles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify, candles api.CandlesResponse) (ret StagingInfo, err error) {
 	ctx = util.WithLoggerValue(ctx, "action", "stage")
 
 	err = backoff.RetryNotify(func() error {
@@ -335,11 +504,11 @@ func Candles52Wk(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, symbo
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 
-			a, ac, err := calcAffected52WkCandles(ctx, jobRunId, tx, symbol)
+			a, ac, err := calcAffected52WkCandles(ctx, jobRunId, tx, candles)
 			if err != nil {
 				return err
 			}
-			util.Logf(ctx, logging.Debug, "successfully calculated %d affected 52wk candles for symbol %s", ac, symbol)
+			util.Logf(ctx, logging.Debug, "successfully calculated %d affected 52wk candles for symbol %s", ac, candles.Request.Symbol)
 
 			r, err := updateAffected52WkCandles(ctx, tx, jobRunId, a)
 			if err != nil {
@@ -431,7 +600,7 @@ func updateOneAffected52WkCandle(ctx context.Context, tx pgx.Tx, jobRunId uint64
 	return r.RowsAffected(), nil
 }
 
-func calcAffected52WkCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx, symbol string) (map[string][]time.Time, int64, error) {
+func calcAffected52WkCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx, resp api.CandlesResponse) (map[string][]time.Time, int64, error) {
 	var rowsAffected int64
 	rs, err := tx.Query(ctx, `
 		SELECT
@@ -447,7 +616,7 @@ func calcAffected52WkCandles(ctx context.Context, jobRunId uint64, tx pgx.Tx, sy
 		GROUP BY
 			affected.symbol,
 			affected.timestamp
-		`, symbol, jobRunId)
+		`, resp.Request.Symbol, jobRunId)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error while determining affected 52 week candles: %w", err)
 	}
@@ -479,8 +648,11 @@ type StagingInfo struct {
 	RowsStaged   int64
 }
 
-func LatestCandles(ctx context.Context, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (map[string]time.Time, error) {
-	var ret map[string]time.Time
+type LatestCandles map[api.Symbol]LatestCandleTime
+type LatestCandleTime time.Time
+
+func LookupLatestCandles(ctx context.Context, pool *pgxpool.Pool, bo backoff.BackOff, bon backoff.Notify) (LatestCandles, error) {
+	var ret LatestCandles
 	err := backoff.RetryNotify(func() error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
@@ -499,15 +671,15 @@ func LatestCandles(ctx context.Context, pool *pgxpool.Pool, bo backoff.BackOff, 
 			}
 			defer rows.Close()
 
-			ret = make(map[string]time.Time)
+			ret = make(LatestCandles)
 			for rows.Next() {
-				var symbol string
+				var symbol api.Symbol
 				var timestamp time.Time
 				err := rows.Scan(&symbol, &timestamp)
 				if err != nil {
 					return fmt.Errorf("failed to parse latest stocks: %w", err)
 				}
-				ret[symbol] = timestamp
+				ret[symbol] = LatestCandleTime(timestamp)
 			}
 			return nil
 		})

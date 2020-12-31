@@ -25,6 +25,7 @@ import (
 	"github.com/Finnhub-Stock-API/finnhub-go"
 	"github.com/ajjensen13/config"
 	"github.com/ajjensen13/gke"
+	db2 "github.com/ajjensen13/stocker/internal/db"
 	"github.com/ajjensen13/stocker/internal/util"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/golang-migrate/migrate/v4"
@@ -34,7 +35,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ajjensen13/stocker/internal/external"
+	"github.com/ajjensen13/stocker/internal/api"
 )
 
 func provideTimezone(appConfig *appConfig) (*time.Location, error) {
@@ -102,9 +103,9 @@ func provideDbSecrets() (*url.Userinfo, error) {
 
 type MaxElapsedTime time.Duration
 
-func provideBackoffNotifier(ctx context.Context) backoff.Notify {
+func backoffNotifier(ctx context.Context) backoff.Notify {
 	return func(err error, duration time.Duration) {
-		if errors.Is(err, external.ErrToManyRequests) {
+		if errors.Is(err, api.ErrToManyRequests) {
 			util.Logf(ctx, logging.Debug, "request exceeded rate limit, waiting %v before retrying: %v", duration, err)
 			return
 		}
@@ -112,14 +113,15 @@ func provideBackoffNotifier(ctx context.Context) backoff.Notify {
 	}
 }
 
-func provideLatestStock(stock finnhub.Stock, latest latestStocks) latestStock {
-	return latestStock{
-		symbol:    stock.Symbol,
-		timestamp: latest[stock.Symbol],
-	}
+func latestCandleTimeFromLatestCandles(symbol api.Symbol, latestCandles db2.LatestCandles) db2.LatestCandleTime {
+	return latestCandles[symbol]
 }
 
-func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) candleConfig {
+func buildStocksRequest(exchange Exchange) api.StocksRequest {
+	return api.StocksRequest{Exchange: api.Exchange(exchange)}
+}
+
+func buildCandleRequest(cfg *appConfig, lct db2.LatestCandleTime, tz *time.Location, symbol api.Symbol) api.CandlesRequest {
 	var endDate time.Time
 	if cfg.EndDate.IsZero() {
 		now := time.Now().In(tz)
@@ -130,7 +132,7 @@ func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) 
 
 	var startDate time.Time
 	if cfg.StartDate.IsZero() {
-		startDate = latest.timestamp.Add(time.Second)
+		startDate = time.Time(lct).Add(time.Second)
 	} else {
 		startDate = cfg.StartDate.In(tz)
 	}
@@ -139,33 +141,34 @@ func provideCandleConfig(cfg *appConfig, latest latestStock, tz *time.Location) 
 		endDate, startDate = startDate, endDate
 	}
 
-	return candleConfig{
-		resolution: cfg.Resolution,
-		startDate:  startDate,
-		endDate:    endDate,
+	return api.CandlesRequest{
+		Symbol:     symbol,
+		Resolution: api.Resolution(cfg.Resolution),
+		From:       api.From(startDate),
+		To:         api.To(endDate),
 	}
 }
 
-func retrieveSrcCandlesImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, s finnhub.Stock, cfg candleConfig) (external.StockCandlesWithMetadata, error) {
-	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
-	util.Logf(ctx, logging.Debug, "requesting %q candles from finnhub. (%v — %v) / %s", s.Symbol, cfg.startDate, cfg.endDate, cfg.resolution)
-	return external.RequestCandles(ctx, client, bo, bon, s, string(cfg.resolution), cfg.startDate, cfg.endDate)
+func buildCompanyProfileRequest(symbol api.Symbol) api.CompanyProfileRequest {
+	return api.CompanyProfileRequest{Symbol: symbol}
 }
 
-func retrieveSrcStocksImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, cfg *appConfig) ([]finnhub.Stock, error) {
-	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
-	util.Logf(ctx, logging.Debug, "requesting %q stocks from finnhub", cfg.Exchange)
-	return external.RequestStocks(ctx, client, bo, bon, string(cfg.Exchange))
+func requestCandlesImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, throttler *time.Ticker, bo backoff.BackOff, bon backoff.Notify, req api.CandlesRequest) (api.CandlesResponse, error) {
+	ctx = util.WithLoggerValue(ctx, "action", "request")
+	util.Logf(ctx, logging.Debug, "requesting %q candles from finnhub. (%v — %v) / %s", req.Symbol, req.From, req.To, req.Resolution)
+	return api.RequestCandles(ctx, client, throttler, bo, bon, req)
 }
 
-func retrieveSrcCompanyProfileImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, bo backoff.BackOff, bon backoff.Notify, stock finnhub.Stock) (finnhub.CompanyProfile2, error) {
-	ctx = util.WithLoggerValue(ctx, "action", "retrieve")
-	util.Logf(ctx, logging.Debug, "requesting %q company profiles from finnhub", stock.Symbol)
-	return external.RequestCompanyProfile(ctx, client, bo, bon, stock)
+func requestStocksImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, throttler *time.Ticker, bo backoff.BackOff, bon backoff.Notify, req api.StocksRequest) (api.StocksResponse, error) {
+	ctx = util.WithLoggerValue(ctx, "action", "request")
+	util.Logf(ctx, logging.Debug, "requesting %q stocks from finnhub", req.Exchange)
+	return api.RequestStocks(ctx, client, throttler, bo, bon, req)
 }
 
-func provideLatestStocks(latest map[string]time.Time) latestStocks {
-	return latest
+func requestCompanyProfileImpl(ctx apiAuthContext, client *finnhub.DefaultApiService, throttler *time.Ticker, bo backoff.BackOff, bon backoff.Notify, req api.CompanyProfileRequest) (api.CompanyProfileResponse, error) {
+	ctx = util.WithLoggerValue(ctx, "action", "request")
+	util.Logf(ctx, logging.Debug, "requesting %q company profiles from finnhub", req.Symbol)
+	return api.RequestCompanyProfile(ctx, client, throttler, bo, bon, req)
 }
 
 func provideDataSourceName(user *url.Userinfo, cfg *appConfig) (dsn *url.URL, err error) {
@@ -218,7 +221,7 @@ func provideDbConnPool(ctx context.Context, dsn dbPoolDsn) (ret *pgxpool.Pool, c
 		Port:              cfg.ConnConfig.Port,
 		Database:          cfg.ConnConfig.Database,
 		User:              cfg.ConnConfig.User,
-		// _: 			   cfg.ConnConfig.Password,
+		// _: 			   cfg.ConnConfig.Password, DON'T INCLUDE THIS
 		ConnectTimeout: cfg.ConnConfig.ConnectTimeout.String(),
 		LogLevel:       cfg.ConnConfig.LogLevel.String(),
 	}), logging.Debug, "database connection pool created")

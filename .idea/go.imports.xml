@@ -4,6 +4,7 @@
     <option name="excludedPackages">
       <array>
         <option value="builtin" />
+        <option value="github.com/ajjensen13/stocker/cmd" />
       </array>
     </option>
   </component>
