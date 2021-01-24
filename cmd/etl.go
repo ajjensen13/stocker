@@ -78,17 +78,17 @@ func runEtl(ctx context.Context, cmd *cobra.Command) error {
 
 	grp, grpCtx := errgroup.WithContext(ctx)
 	grp.Go(func() error {
-		ess, err := processStocks(grpCtx, jobRunId, pool)
+		stocks, err := processStocks(grpCtx, jobRunId, pool)
 		if err != nil {
 			return err
 		}
 
 		grp.Go(func() error {
-			return processCandles(grpCtx, jobRunId, pool, ess)
+			return processCandles(grpCtx, jobRunId, pool, stocks)
 		})
 
 		grp.Go(func() error {
-			return processCompanyProfiles(grpCtx, jobRunId, pool, ess)
+			return processCompanyProfiles(grpCtx, jobRunId, pool, stocks)
 		})
 
 		return nil
@@ -187,11 +187,6 @@ func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.
 			}
 			util.Logf(ctx, logging.Debug, "successfully retrieved %q company profile from finnhub", stock.Symbol)
 
-			if profile.Response.Ticker == "" {
-				util.Logf(ctx, logging.Debug, "company profile %q will be skipped due to missing ticker", stock.Symbol)
-				continue
-			}
-
 			err = saveCompanyProfile(backoffContext(ctx, 5*time.Minute), jobRunId, pool, profile)
 			if err != nil {
 				return fmt.Errorf("failed to load company profile %q into database: %w", stock.Symbol, err)
@@ -203,11 +198,11 @@ func processCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.
 	}
 	util.Logf(ctx, logging.Info, "successfully loaded %d of %d company profiles into src schema", success, len(stocks.Response))
 
-	si, err := stageCompanyProfiles(backoffContext(ctx, 5*time.Minute), jobRunId, pool)
+	info, err := stageCompanyProfiles(backoffContext(ctx, 5*time.Minute), jobRunId, pool)
 	if err != nil {
 		return fmt.Errorf("failed to stage company profiles: %w", err)
 	}
-	util.Logf(ctx, logging.Info, "successfully staged %d company profiles into stage schema (%d rows modified)", si.RowsStaged, si.RowsModified)
+	util.Logf(ctx, logging.Info, "successfully staged %d company profiles into stage schema (%d rows modified)", info.RowsStaged, info.RowsModified)
 
 	return nil
 }

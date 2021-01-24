@@ -42,11 +42,12 @@ type Candle struct {
 }
 
 type CompanyProfile struct {
+	Symbol               pgtype.Text
 	Country              pgtype.Text
 	Currency             pgtype.Text
 	Exchange             pgtype.Text
 	Name                 pgtype.Text
-	Symbol               pgtype.Text
+	Ticker               pgtype.Text
 	Ipo                  pgtype.Date
 	MarketCapitalization pgtype.Float4
 	SharesOutstanding    pgtype.Float4
@@ -120,21 +121,13 @@ func TransformCandles(symbol api.Symbol, in finnhub.StockCandles, tz *time.Locat
 	return out, nil
 }
 
-func TransformCompanyProfiles(in []finnhub.CompanyProfile2) (out []CompanyProfile) {
-	out = make([]CompanyProfile, len(in))
-	for i, icp := range in {
-		p := TransformCompanyProfile(icp)
-		out[i] = p
-	}
-	return out
-}
-
-func TransformCompanyProfile(in finnhub.CompanyProfile2) (out CompanyProfile) {
+func TransformCompanyProfile(symbol api.Symbol, in finnhub.CompanyProfile2) (out CompanyProfile) {
+	_ = out.Symbol.Set(string(symbol))
 	_ = out.Country.Set(in.Country)
 	_ = out.Currency.Set(in.Currency)
 	_ = out.Exchange.Set(in.Exchange)
 	_ = out.Name.Set(in.Name)
-	_ = out.Symbol.Set(in.Ticker)
+	_ = out.Ticker.Set(in.Ticker)
 	_ = out.Ipo.Set(in.Ipo)
 	_ = out.MarketCapitalization.Set(in.MarketCapitalization)
 	_ = out.SharesOutstanding.Set(in.ShareOutstanding)
@@ -155,10 +148,6 @@ func SaveStocks(ctx context.Context, pool *pgxpool.Pool, jobRunId uint64, bo bac
 			success := 0
 
 			for _, stock := range stocks.Response {
-				if stock.Symbol == "" {
-					util.Logf(ctx, logging.Debug, "skipping stock due to missing symbol: %v", stock)
-					continue
-				}
 				_, err := tx.Exec(ctx, `INSERT INTO src.stocks (job_run_id, symbol, data) VALUES ($1, $2, $3)`, jobRunId, stock.Symbol, stock)
 				if err != nil {
 					return fmt.Errorf("failed to load stock symbol %q: %w", stock.Symbol, err)
@@ -318,6 +307,8 @@ func StageCandles(ctx context.Context, jobRunId uint64, pool *pgxpool.Pool, bo b
 				summary := map[string]int{}
 
 				for _, stockCandle := range stockCandles {
+					ctx := util.WithLoggerValue(ctx, "symbol", stockCandle.Symbol)
+
 					sql := `
 						INSERT INTO stage.candles
 							(job_run_id, symbol, timestamp, open, high, low, close, volume, modified, created) 
@@ -393,13 +384,13 @@ func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Po
 
 	err = backoff.RetryNotify(func() error {
 		var rowsStaged, rowsModified int64
-		var srcProfiles []finnhub.CompanyProfile2
+		var responses []api.CompanyProfileResponse
 
 		err := util.RunTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) (err error) {
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
-			srcProfiles, err = lookupCompanyProfilesToStage(ctx, jobRunId, tx)
+			responses, err = lookupCompanyProfilesToStage(ctx, jobRunId, tx)
 			return err
 		})
 		if err != nil {
@@ -410,15 +401,16 @@ func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Po
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 
-			profiles := TransformCompanyProfiles(srcProfiles)
+			for _, response := range responses {
+				ctx := util.WithLoggerValue(ctx, "symbol", response.Request.Symbol)
 
-			for _, tcp := range profiles {
-				ctx := util.WithLoggerValue(ctx, "symbol", tcp.Symbol)
+				profile := TransformCompanyProfile(response.Request.Symbol, response.Response)
+
 				sql := `
 					INSERT INTO stage.company_profiles
-						(job_run_id, symbol, exchange, country, currency, name, ipo, market_capitalization, shares_outstanding, logo, phone, web_url, industry, created, modified)
+						(job_run_id, symbol, exchange, country, currency, name, ticker, ipo, market_capitalization, shares_outstanding, logo, phone, web_url, industry, created, modified)
 					VALUES
-						($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
+						($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
 					ON CONFLICT 
 						(symbol) 
 					DO UPDATE 
@@ -428,6 +420,7 @@ func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Po
 							country = excluded.country, 
 							currency = excluded.currency, 
 							name = excluded.name, 
+							ticker = excluded.ticker, 
 							ipo = excluded.ipo, 
 							market_capitalization = excluded.market_capitalization, 
 							shares_outstanding = excluded.shares_outstanding, 
@@ -441,6 +434,7 @@ func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Po
 							company_profiles.country IS DISTINCT FROM excluded.country OR
 							company_profiles.currency IS DISTINCT FROM excluded.currency OR
 							company_profiles.name IS DISTINCT FROM excluded.name OR
+							company_profiles.ticker IS DISTINCT FROM excluded.ticker OR
 							company_profiles.ipo IS DISTINCT FROM excluded.ipo OR
 							company_profiles.market_capitalization IS DISTINCT FROM excluded.market_capitalization OR
 							company_profiles.shares_outstanding IS DISTINCT FROM excluded.shares_outstanding OR
@@ -450,7 +444,7 @@ func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Po
 							company_profiles.industry IS DISTINCT FROM excluded.industry
 `
 
-				r, err := tx.Exec(ctx, sql, jobRunId, tcp.Symbol, tcp.Exchange, tcp.Country, tcp.Currency, tcp.Name, tcp.Ipo, tcp.MarketCapitalization, tcp.SharesOutstanding, tcp.Logo, tcp.Phone, tcp.WebUrl, tcp.Industry)
+				r, err := tx.Exec(ctx, sql, jobRunId, response.Request.Symbol, profile.Exchange, profile.Country, profile.Currency, profile.Name, profile.Ticker, profile.Ipo, profile.MarketCapitalization, profile.SharesOutstanding, profile.Logo, profile.Phone, profile.WebUrl, profile.Industry)
 				if err != nil {
 					return fmt.Errorf("error while staging company profiles: %w", err)
 				}
@@ -458,7 +452,7 @@ func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Po
 				rowsModified += r.RowsAffected()
 				rowsStaged++
 
-				util.Logf(ctx, logging.Debug, "successfully staged company profile: %v", tcp.Symbol)
+				util.Logf(ctx, logging.Debug, "successfully staged company profile: %v", response.Request.Symbol)
 			}
 
 			return nil
@@ -475,22 +469,22 @@ func StageCompanyProfiles(ctx context.Context, jobRunId uint64, pool *pgxpool.Po
 	return
 }
 
-func lookupCompanyProfilesToStage(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []finnhub.CompanyProfile2, err error) {
-	ret = make([]finnhub.CompanyProfile2, 0, 50_000)
+func lookupCompanyProfilesToStage(ctx context.Context, jobRunId uint64, tx pgx.Tx) (ret []api.CompanyProfileResponse, err error) {
+	ret = make([]api.CompanyProfileResponse, 0, 50_000) // should be big enough for a while
 
-	rows, err := tx.Query(ctx, `SELECT data FROM src.company_profiles WHERE job_run_id = $1`, jobRunId)
+	rows, err := tx.Query(ctx, `SELECT symbol, data FROM src.company_profiles WHERE job_run_id = $1`, jobRunId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source company profiles: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var src finnhub.CompanyProfile2
-		err := rows.Scan(&src)
+		var d api.CompanyProfileResponse
+		err := rows.Scan(&d.Request.Symbol, &d.Response)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan source company profile: %w", err)
 		}
-		ret = append(ret, src)
+		ret = append(ret, d)
 	}
 
 	return ret, nil
