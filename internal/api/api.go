@@ -18,10 +18,12 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 package api
 
 import (
+	"cloud.google.com/go/logging"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/Finnhub-Stock-API/finnhub-go"
+	"github.com/ajjensen13/stocker/internal/util"
 	"github.com/antihax/optional"
 	"github.com/cenkalti/backoff/v4"
 	"io/ioutil"
@@ -40,6 +42,17 @@ type StocksResponse struct {
 	Response []finnhub.Stock
 }
 
+var errSymbolMissing = errors.New("stock symbol missing")
+
+func stockIsValid(stock finnhub.Stock) error {
+	switch {
+	case stock.Symbol == "":
+		return errSymbolMissing
+	default:
+		return nil
+	}
+}
+
 func RequestStocks(ctx context.Context, client *finnhub.DefaultApiService, ticker *time.Ticker, bo backoff.BackOff, bon backoff.Notify, req StocksRequest) (result StocksResponse, err error) {
 	err = backoff.RetryNotify(func() error {
 		select {
@@ -53,7 +66,17 @@ func RequestStocks(ctx context.Context, client *finnhub.DefaultApiService, ticke
 			if err != nil {
 				return handleErr("error while getting stocks", httpResp, err)
 			}
-			result = StocksResponse{Request: req, Response: stocks}
+
+			validStocks := make([]finnhub.Stock, 0, len(stocks))
+			for _, stock := range stocks {
+				if err := stockIsValid(stock); err != nil {
+					util.Logf(ctx, logging.Warning, fmt.Errorf("invalid stock will be skipped: %v: %w", stock, err).Error())
+					continue
+				}
+				validStocks = append(validStocks, stock)
+			}
+
+			result = StocksResponse{Request: req, Response: validStocks}
 			return nil
 		}
 	}, bo, bon)
