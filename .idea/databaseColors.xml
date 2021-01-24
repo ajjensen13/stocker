@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DatabaseColorSettings">
+    <colors>
+      <entry key="metadata/stocker/5ca23bbc-d2ce-422a-8276-87ad4b9a4642:SCHEMA" value="Green" />
+      <entry key="report/stocker/5ca23bbc-d2ce-422a-8276-87ad4b9a4642:SCHEMA" value="Green" />
+      <entry key="src/stocker/5ca23bbc-d2ce-422a-8276-87ad4b9a4642:SCHEMA" value="Green" />
+      <entry key="stage/stocker/5ca23bbc-d2ce-422a-8276-87ad4b9a4642:SCHEMA" value="Green" />
+    </colors>
+  </component>
+</project>
